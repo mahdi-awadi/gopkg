@@ -3,4 +3,5 @@ go 1.23
 use (
 	./bus
 	./bus/nats
+	./storage/r2
 )
