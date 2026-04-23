@@ -18,12 +18,16 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `communication/voice/twilio` | `github.com/mahdi-awadi/gopkg/communication/voice/twilio` | Twilio Voice flash-call adapter |
 | `communication/whatsapp/meta` | `github.com/mahdi-awadi/gopkg/communication/whatsapp/meta` | Meta Cloud API WhatsApp adapter |
 | `communication/whatsapp/twilio` | `github.com/mahdi-awadi/gopkg/communication/whatsapp/twilio` | WhatsApp-over-Twilio adapter |
+| `clock` | `github.com/mahdi-awadi/gopkg/clock` | Time abstraction (Real + Mock) for testability |
 | `environment` | `github.com/mahdi-awadi/gopkg/environment` | Standard ENVIRONMENT env-var helper |
+| `errorsx` | `github.com/mahdi-awadi/gopkg/errorsx` | Error-kind taxonomy with HTTP status mapping |
 | `i18n` | `github.com/mahdi-awadi/gopkg/i18n` | `LocalizedString` — JSONB-ready i18n map |
+| `id` | `github.com/mahdi-awadi/gopkg/id` | UUIDv7 (time-ordered) generator |
 | `identity/jwt` | `github.com/mahdi-awadi/gopkg/identity/jwt` | Generic HMAC-SHA256 JWT sign/verify |
 | `observability/health` | `github.com/mahdi-awadi/gopkg/observability/health` | HTTP health-check framework |
 | `observability/metrics` | `github.com/mahdi-awadi/gopkg/observability/metrics` | Prometheus metrics exporter |
 | `observability/tracing` | `github.com/mahdi-awadi/gopkg/observability/tracing` | OpenTelemetry tracer + OTLP gRPC exporter |
+| `retry` | `github.com/mahdi-awadi/gopkg/retry` | Context-aware exponential backoff with jitter |
 | `storage/r2` | `github.com/mahdi-awadi/gopkg/storage/r2` | Cloudflare R2 (S3-compatible) object storage client |
 
 ## Layout
