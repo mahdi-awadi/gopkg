@@ -9,5 +9,9 @@ use (
 	./communication/push/expo
 	./communication/push/fcm
 	./communication/sms/twilio
+	./communication/telegram
+	./communication/voice/twilio
+	./communication/whatsapp/meta
+	./communication/whatsapp/twilio
 	./storage/r2
 )

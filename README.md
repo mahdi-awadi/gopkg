@@ -14,6 +14,10 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `communication/email/ses` | `github.com/mahdi-awadi/gopkg/communication/email/ses` | Amazon SES email adapter |
 | `communication/push/fcm` | `github.com/mahdi-awadi/gopkg/communication/push/fcm` | Firebase Cloud Messaging push adapter |
 | `communication/push/expo` | `github.com/mahdi-awadi/gopkg/communication/push/expo` | Expo push notifications adapter |
+| `communication/telegram` | `github.com/mahdi-awadi/gopkg/communication/telegram` | Telegram Bot API adapter |
+| `communication/voice/twilio` | `github.com/mahdi-awadi/gopkg/communication/voice/twilio` | Twilio Voice flash-call adapter |
+| `communication/whatsapp/meta` | `github.com/mahdi-awadi/gopkg/communication/whatsapp/meta` | Meta Cloud API WhatsApp adapter |
+| `communication/whatsapp/twilio` | `github.com/mahdi-awadi/gopkg/communication/whatsapp/twilio` | WhatsApp-over-Twilio adapter |
 | `storage/r2` | `github.com/mahdi-awadi/gopkg/storage/r2` | Cloudflare R2 (S3-compatible) object storage client |
 
 ## Layout
