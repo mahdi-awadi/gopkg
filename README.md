@@ -8,6 +8,7 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 |---|---|---|
 | `bus` | `github.com/mahdi-awadi/gopkg/bus` | Pub/sub interface (5 methods) — bring your own adapter |
 | `bus/nats` | `github.com/mahdi-awadi/gopkg/bus/nats` | NATS JetStream adapter for `bus.Broker` |
+| `communication/provider` | `github.com/mahdi-awadi/gopkg/communication/provider` | Cross-channel notification-delivery contract (+ registry) |
 | `storage/r2` | `github.com/mahdi-awadi/gopkg/storage/r2` | Cloudflare R2 (S3-compatible) object storage client |
 
 ## Layout
