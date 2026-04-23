@@ -20,6 +20,8 @@ use (
 	./crypto/password
 	./environment
 	./errorsx
+	./financial/fx
+	./financial/paymentgateway
 	./httpx/client
 	./httpx/middleware
 	./i18n
