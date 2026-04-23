@@ -34,6 +34,10 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `sqlbuilder` | `github.com/mahdi-awadi/gopkg/sqlbuilder` | Fluent Postgres SELECT builder |
 | `storage/r2` | `github.com/mahdi-awadi/gopkg/storage/r2` | Cloudflare R2 (S3-compatible) object storage client |
 | `validate` | `github.com/mahdi-awadi/gopkg/validate` | Email / phone / URL / UUID / password validators |
+| `cache/lru` | `github.com/mahdi-awadi/gopkg/cache/lru` | Thread-safe generic LRU cache with optional TTL |
+| `workerpool` | `github.com/mahdi-awadi/gopkg/workerpool` | Bounded-concurrency goroutine pool |
+| `stringcase` | `github.com/mahdi-awadi/gopkg/stringcase` | Case conversions (snake/camel/pascal/kebab/screaming) |
+| `crypto/password` | `github.com/mahdi-awadi/gopkg/crypto/password` | bcrypt wrapper for hash/verify/rehash |
 
 ## Layout
 

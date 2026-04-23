@@ -3,6 +3,7 @@ go 1.23
 use (
 	./bus
 	./bus/nats
+	./cache/lru
 	./clock
 	./communication/email/sendgrid
 	./communication/email/ses
@@ -14,6 +15,7 @@ use (
 	./communication/voice/twilio
 	./communication/whatsapp/meta
 	./communication/whatsapp/twilio
+	./crypto/password
 	./environment
 	./errorsx
 	./i18n
@@ -28,5 +30,7 @@ use (
 	./retry
 	./sqlbuilder
 	./storage/r2
+	./stringcase
 	./validate
+	./workerpool
 )
