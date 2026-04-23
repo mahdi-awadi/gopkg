@@ -38,6 +38,9 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `workerpool` | `github.com/mahdi-awadi/gopkg/workerpool` | Bounded-concurrency goroutine pool |
 | `stringcase` | `github.com/mahdi-awadi/gopkg/stringcase` | Case conversions (snake/camel/pascal/kebab/screaming) |
 | `crypto/password` | `github.com/mahdi-awadi/gopkg/crypto/password` | bcrypt wrapper for hash/verify/rehash |
+| `signals` | `github.com/mahdi-awadi/gopkg/signals` | Graceful-shutdown ctx helpers for SIGINT/SIGTERM |
+| `slicex` | `github.com/mahdi-awadi/gopkg/slicex` | Generic Map/Filter/Reduce/Unique/Chunk/GroupBy |
+| `httpx/middleware` | `github.com/mahdi-awadi/gopkg/httpx/middleware` | Recover/RequestID/Logger/Timeout/CORS stack |
 
 ## Layout
 

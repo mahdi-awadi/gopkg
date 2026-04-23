@@ -18,6 +18,7 @@ use (
 	./crypto/password
 	./environment
 	./errorsx
+	./httpx/middleware
 	./i18n
 	./id
 	./identity/jwt
@@ -28,6 +29,8 @@ use (
 	./ptr
 	./ratelimit
 	./retry
+	./signals
+	./slicex
 	./sqlbuilder
 	./storage/r2
 	./stringcase
