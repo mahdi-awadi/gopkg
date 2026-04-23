@@ -11,6 +11,9 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `communication/provider` | `github.com/mahdi-awadi/gopkg/communication/provider` | Cross-channel notification-delivery contract (+ registry) |
 | `communication/sms/twilio` | `github.com/mahdi-awadi/gopkg/communication/sms/twilio` | Twilio SMS adapter |
 | `communication/email/sendgrid` | `github.com/mahdi-awadi/gopkg/communication/email/sendgrid` | SendGrid email adapter |
+| `communication/email/ses` | `github.com/mahdi-awadi/gopkg/communication/email/ses` | Amazon SES email adapter |
+| `communication/push/fcm` | `github.com/mahdi-awadi/gopkg/communication/push/fcm` | Firebase Cloud Messaging push adapter |
+| `communication/push/expo` | `github.com/mahdi-awadi/gopkg/communication/push/expo` | Expo push notifications adapter |
 | `storage/r2` | `github.com/mahdi-awadi/gopkg/storage/r2` | Cloudflare R2 (S3-compatible) object storage client |
 
 ## Layout
