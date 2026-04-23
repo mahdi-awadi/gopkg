@@ -18,10 +18,13 @@ use (
 	./crypto/password
 	./environment
 	./errorsx
+	./httpx/client
 	./httpx/middleware
 	./i18n
 	./id
 	./identity/jwt
+	./jsonx
+	./mapx
 	./money
 	./observability/health
 	./observability/metrics

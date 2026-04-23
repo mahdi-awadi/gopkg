@@ -41,6 +41,9 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `signals` | `github.com/mahdi-awadi/gopkg/signals` | Graceful-shutdown ctx helpers for SIGINT/SIGTERM |
 | `slicex` | `github.com/mahdi-awadi/gopkg/slicex` | Generic Map/Filter/Reduce/Unique/Chunk/GroupBy |
 | `httpx/middleware` | `github.com/mahdi-awadi/gopkg/httpx/middleware` | Recover/RequestID/Logger/Timeout/CORS stack |
+| `httpx/client` | `github.com/mahdi-awadi/gopkg/httpx/client` | `*http.Client` builder with sane defaults + optional retry |
+| `jsonx` | `github.com/mahdi-awadi/gopkg/jsonx` | JSON over HTTP: Decode (size-limited) + Write + Error |
+| `mapx` | `github.com/mahdi-awadi/gopkg/mapx` | Generic map helpers (Keys/Merge/Invert/Filter/MapValues) |
 
 ## Layout
 
