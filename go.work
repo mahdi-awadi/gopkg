@@ -19,9 +19,14 @@ use (
 	./i18n
 	./id
 	./identity/jwt
+	./money
 	./observability/health
 	./observability/metrics
 	./observability/tracing
+	./ptr
+	./ratelimit
 	./retry
+	./sqlbuilder
 	./storage/r2
+	./validate
 )

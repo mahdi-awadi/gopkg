@@ -27,8 +27,13 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `observability/health` | `github.com/mahdi-awadi/gopkg/observability/health` | HTTP health-check framework |
 | `observability/metrics` | `github.com/mahdi-awadi/gopkg/observability/metrics` | Prometheus metrics exporter |
 | `observability/tracing` | `github.com/mahdi-awadi/gopkg/observability/tracing` | OpenTelemetry tracer + OTLP gRPC exporter |
+| `money` | `github.com/mahdi-awadi/gopkg/money` | Immutable Money with currency + minor-unit precision |
+| `ptr` | `github.com/mahdi-awadi/gopkg/ptr` | Generic `*T` helpers (To, Deref, Or, Equal) |
+| `ratelimit` | `github.com/mahdi-awadi/gopkg/ratelimit` | Token-bucket rate limiter |
 | `retry` | `github.com/mahdi-awadi/gopkg/retry` | Context-aware exponential backoff with jitter |
+| `sqlbuilder` | `github.com/mahdi-awadi/gopkg/sqlbuilder` | Fluent Postgres SELECT builder |
 | `storage/r2` | `github.com/mahdi-awadi/gopkg/storage/r2` | Cloudflare R2 (S3-compatible) object storage client |
+| `validate` | `github.com/mahdi-awadi/gopkg/validate` | Email / phone / URL / UUID / password validators |
 
 ## Layout
 
