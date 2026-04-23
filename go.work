@@ -13,5 +13,7 @@ use (
 	./communication/voice/twilio
 	./communication/whatsapp/meta
 	./communication/whatsapp/twilio
+	./environment
+	./i18n
 	./storage/r2
 )
