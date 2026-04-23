@@ -4,5 +4,6 @@ use (
 	./bus
 	./bus/nats
 	./communication/provider
+	./communication/sms/twilio
 	./storage/r2
 )
