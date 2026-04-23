@@ -3,6 +3,7 @@ go 1.23
 use (
 	./bus
 	./bus/nats
+	./communication/email/sendgrid
 	./communication/provider
 	./communication/sms/twilio
 	./storage/r2
