@@ -11,5 +11,3 @@ require (
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 )
-
-replace github.com/mahdi-awadi/gopkg/communication/provider => ../../provider

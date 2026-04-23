@@ -17,7 +17,3 @@ require (
 	golang.org/x/sys v0.5.0 // indirect
 	golang.org/x/text v0.13.0 // indirect
 )
-
-// Replace bus with the local path while the main repo is unpublished.
-// Remove this replace directive before publishing bus/nats/v0.1.0.
-replace github.com/mahdi-awadi/gopkg/bus => ../
