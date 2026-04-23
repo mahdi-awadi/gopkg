@@ -1,0 +1,18 @@
+# Go build artifacts
+*.exe
+*.test
+*.out
+cover.out
+coverage.txt
+
+# Go workspace
+go.work.sum
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# testcontainers
+testcontainers-*.tmp
