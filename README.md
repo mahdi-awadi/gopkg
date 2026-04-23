@@ -20,6 +20,10 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `communication/whatsapp/twilio` | `github.com/mahdi-awadi/gopkg/communication/whatsapp/twilio` | WhatsApp-over-Twilio adapter |
 | `environment` | `github.com/mahdi-awadi/gopkg/environment` | Standard ENVIRONMENT env-var helper |
 | `i18n` | `github.com/mahdi-awadi/gopkg/i18n` | `LocalizedString` — JSONB-ready i18n map |
+| `identity/jwt` | `github.com/mahdi-awadi/gopkg/identity/jwt` | Generic HMAC-SHA256 JWT sign/verify |
+| `observability/health` | `github.com/mahdi-awadi/gopkg/observability/health` | HTTP health-check framework |
+| `observability/metrics` | `github.com/mahdi-awadi/gopkg/observability/metrics` | Prometheus metrics exporter |
+| `observability/tracing` | `github.com/mahdi-awadi/gopkg/observability/tracing` | OpenTelemetry tracer + OTLP gRPC exporter |
 | `storage/r2` | `github.com/mahdi-awadi/gopkg/storage/r2` | Cloudflare R2 (S3-compatible) object storage client |
 
 ## Layout

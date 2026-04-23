@@ -15,5 +15,9 @@ use (
 	./communication/whatsapp/twilio
 	./environment
 	./i18n
+	./identity/jwt
+	./observability/health
+	./observability/metrics
+	./observability/tracing
 	./storage/r2
 )
