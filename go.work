@@ -1,9 +1,11 @@
 go 1.23
 
 use (
+	./audio/codec
 	./bus
 	./bus/nats
 	./cache/lru
+	./circuitbreaker
 	./clock
 	./communication/email/sendgrid
 	./communication/email/ses
@@ -29,8 +31,10 @@ use (
 	./observability/health
 	./observability/metrics
 	./observability/tracing
+	./pipeline
 	./ptr
 	./ratelimit
+	./registry
 	./retry
 	./signals
 	./slicex
