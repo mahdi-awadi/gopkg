@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -95,5 +96,91 @@ func TestFakeTransport_EndOfScriptClosesReceive(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Error("error channel never closed")
+	}
+}
+
+func TestFakeLLM_ScriptEventsDelivered(t *testing.T) {
+	fl := NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1},
+	)
+	fl.Script(
+		pipeline.EventAssistantText{Text: "hi", Final: true},
+		pipeline.EventTurnComplete{},
+	)
+	fl.CloseEvents()
+	ctx := context.Background()
+	_ = fl.Open(ctx, pipeline.SetupRequest{})
+
+	ch, _ := fl.Events(ctx)
+	var got []string
+	for ev := range ch {
+		switch e := ev.(type) {
+		case pipeline.EventAssistantText:
+			got = append(got, "text:"+e.Text)
+		case pipeline.EventTurnComplete:
+			got = append(got, "turn")
+		}
+	}
+	want := []string{"text:hi", "turn"}
+	if len(got) != len(want) {
+		t.Errorf("got %v, want %v", got, want)
+		return
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestFakeLLM_SendAudioRecorded(t *testing.T) {
+	fl := NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1},
+	)
+	_ = fl.SendAudio(context.Background(), pipeline.Frame{Data: []byte{0x1}})
+	if got := fl.AudioIn(); len(got) != 1 || got[0].Data[0] != 0x1 {
+		t.Errorf("AudioIn=%v", got)
+	}
+}
+
+func TestFakeLLM_OpenErrorPropagates(t *testing.T) {
+	fl := NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1},
+	)
+	fl.SetOpenErr(errors.New("bad setup"))
+	err := fl.Open(context.Background(), pipeline.SetupRequest{})
+	if err == nil || err.Error() != "bad setup" {
+		t.Errorf("want 'bad setup', got %v", err)
+	}
+}
+
+func TestFakeLLM_SendToolResultsRecorded(t *testing.T) {
+	fl := NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1},
+	)
+	results := []pipeline.ToolResult{{CallID: "a", Data: "x"}, {CallID: "b", Data: "y"}}
+	_ = fl.SendToolResults(context.Background(), results)
+	got := fl.ToolResultsIn()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 batch, got %d", len(got))
+	}
+	if len(got[0]) != 2 || got[0][0].CallID != "a" || got[0][1].CallID != "b" {
+		t.Errorf("batch=%v", got[0])
+	}
+}
+
+func TestFakeLLM_InjectTurnRecorded(t *testing.T) {
+	fl := NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1},
+	)
+	_ = fl.InjectTurn(context.Background(), pipeline.HistoryTurn{Role: pipeline.RoleUser, Content: "prior"})
+	got := fl.InjectedTurns()
+	if len(got) != 1 || got[0].Content != "prior" {
+		t.Errorf("InjectedTurns=%v", got)
 	}
 }
