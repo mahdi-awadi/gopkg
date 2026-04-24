@@ -15,7 +15,7 @@
 - Sentinel: `ErrFormatBridge` for unsupported format pairs
 - `fake/` subpackage: `Transport`, `LLM`, `Executor`, `Filler`, `RecorderObserver`
 - 20+ unit tests (race-clean), 3 runnable examples, 1 fuzz target
-- ≥85% statement coverage on `pipeline.go` + `codec_bridge.go`
+- Statement coverage: `codec_bridge.go` 100%, `pipeline.go` ~85% (1 defensive guard unreachable without fake-transport/LLM error-injection helpers)
 
 ### Dependencies
 - `github.com/mahdi-awadi/gopkg/audio/codec v0.1.0`
