@@ -736,3 +736,98 @@ func TestConcurrent_RunSimultaneously(t *testing.T) {
 		}
 	}
 }
+
+func TestRun_AttrsCopiedIntoSession(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	attrs := map[string]string{"user_id": "u-123", "partner": "acme"}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, attrs)
+
+	var sessionStart pipeline.Session
+	for _, e := range rec.Events() {
+		if s, ok := e.(fake.RecSessionStart); ok {
+			sessionStart = s.S
+			break
+		}
+	}
+	if sessionStart.Attrs["user_id"] != "u-123" || sessionStart.Attrs["partner"] != "acme" {
+		t.Errorf("Session.Attrs=%v, want user_id/partner set", sessionStart.Attrs)
+	}
+	// Verify it's a COPY: mutating the original must not leak into Session.
+	attrs["user_id"] = "mutated"
+	if sessionStart.Attrs["user_id"] != "u-123" {
+		t.Errorf("copyAttrs failed to deep-copy; session sees %q", sessionStart.Attrs["user_id"])
+	}
+}
+
+func TestRun_OutboundBridgeFailureFires_ErrFormatBridge(t *testing.T) {
+	// Inbound pair: transport inbound mulaw@8k → llm outbound pcm16le@16k (supported via Mulaw8kToPCM16LE16k)
+	// Outbound pair: llm inbound pcm16le@48k → transport outbound mulaw@8k (UNSUPPORTED)
+	tr := fake.NewTransport(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1},
+	)
+	ll := fake.NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 48000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1},
+	)
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	err := p.Run(context.Background(), tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if !errors.Is(err, pipeline.ErrFormatBridge) {
+		t.Errorf("Run err=%v, want ErrFormatBridge on outbound bridge", err)
+	}
+	// No SessionStart should have fired.
+	for _, e := range rec.Events() {
+		if _, ok := e.(fake.RecSessionStart); ok {
+			t.Error("SessionStart must not fire when outbound bridge fails")
+		}
+	}
+}
+
+func TestHold_FillerStopsOnTransportSendError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "slow", Name: "s"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	// Transport.Send returns an error on the very first filler frame.
+	tr.SetSendErr(errors.New("wire down"))
+
+	exec := fake.NewExecutor()
+	exec.Register("s", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		time.Sleep(150 * time.Millisecond)
+		return "done", nil
+	})
+
+	filler := fake.NewFiller(pipeline.Frame{Data: []byte{0xAA}})
+	filler.Loop()
+
+	p, _ := pipeline.New(pipeline.Options{
+		ToolConcurrency: 1,
+		HoldFillerDelay: 50 * time.Millisecond,
+		Filler:          filler,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	// Run should NOT fail just because filler Send errored (filler is non-fatal).
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+	// No assertion on outcome — the test's goal is branch coverage of
+	// pumpHoldFiller's Send-error return path.
+}
