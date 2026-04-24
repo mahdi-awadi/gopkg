@@ -1,2 +1,4 @@
 github.com/mahdi-awadi/gopkg/audio/codec v0.1.0 h1:+Q2z2BkCoeNTpw8SGBS2s5CXks+YAESA2gEnlVR3vq0=
 github.com/mahdi-awadi/gopkg/audio/codec v0.1.0/go.mod h1:oBZkaN0k0u/f/zfxG9lkLNEGZpPNqV7m+6qtlQe0t2c=
+github.com/mahdi-awadi/gopkg/id v0.1.0 h1:jkcmOTRbB8mAKOKeVEYX6+qXliVRV6e/1XEYa/CwaHQ=
+github.com/mahdi-awadi/gopkg/id v0.1.0/go.mod h1:dAH/lxG8kazvO52T73tmFuEZyMC9ozao8GXVH1+XX2Y=
