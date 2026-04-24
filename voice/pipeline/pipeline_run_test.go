@@ -200,3 +200,41 @@ func TestRun_InterruptedClearsAndFires(t *testing.T) {
 		t.Error("OnInterrupted never fired")
 	}
 }
+
+func TestRun_HistoryInjectionFiresObserver(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	setup := pipeline.SetupRequest{History: []pipeline.HistoryTurn{
+		{Role: pipeline.RoleUser, Content: "prior 1"},
+		{Role: pipeline.RoleAssistant, Content: "prior 2"},
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), setup, nil)
+
+	var injected int
+	for _, ev := range rec.Events() {
+		if h, ok := ev.(fake.RecHistoryInjected); ok {
+			injected = h.Count
+		}
+	}
+	if injected != 2 {
+		t.Errorf("OnHistoryInjected count=%d, want 2", injected)
+	}
+
+	// Fake LLM also recorded the flushed history inside Open.
+	turns := ll.InjectedTurns()
+	if len(turns) != 2 || turns[0].Content != "prior 1" || turns[1].Content != "prior 2" {
+		t.Errorf("InjectedTurns=%v", turns)
+	}
+}
