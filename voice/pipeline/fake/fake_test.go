@@ -184,3 +184,58 @@ func TestFakeLLM_InjectTurnRecorded(t *testing.T) {
 		t.Errorf("InjectedTurns=%v", got)
 	}
 }
+
+func TestFakeExecutor_ProgrammedResult(t *testing.T) {
+	fe := NewExecutor()
+	fe.Register("greet", func(_ context.Context, call pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return map[string]string{"hello": call.Args["name"].(string)}, nil
+	})
+	res, err := fe.Execute(context.Background(),
+		pipeline.ToolCall{ID: "1", Name: "greet", Args: map[string]any{"name": "world"}},
+		pipeline.Session{})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	m := res.(map[string]string)
+	if m["hello"] != "world" {
+		t.Errorf("got %v", m)
+	}
+}
+
+func TestFakeExecutor_UnknownReturnsError(t *testing.T) {
+	fe := NewExecutor()
+	_, err := fe.Execute(context.Background(), pipeline.ToolCall{Name: "missing"}, pipeline.Session{})
+	if err == nil {
+		t.Error("expected error for unregistered tool")
+	}
+}
+
+func TestFakeFiller_EmitsScriptedFramesThenCloses(t *testing.T) {
+	ff := NewFiller(pipeline.Frame{Data: []byte{1}}, pipeline.Frame{Data: []byte{2}})
+	ch := ff.Frames(context.Background())
+	var got [][]byte
+	for f := range ch {
+		got = append(got, f.Data)
+	}
+	if len(got) != 2 || got[0][0] != 1 || got[1][0] != 2 {
+		t.Errorf("got %v, want [[1] [2]]", got)
+	}
+}
+
+func TestFakeFiller_LoopMode(t *testing.T) {
+	ff := NewFiller(pipeline.Frame{Data: []byte{42}})
+	ff.Loop() // emit forever
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := ff.Frames(ctx)
+	count := 0
+	for f := range ch {
+		count++
+		_ = f
+		if count == 10 {
+			cancel()
+		}
+	}
+	if count < 10 {
+		t.Errorf("loop stopped early at %d", count)
+	}
+}
