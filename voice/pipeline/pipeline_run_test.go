@@ -3,6 +3,8 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -480,5 +482,89 @@ func TestTools_Serial_MultipleCalls_OrderPreserved(t *testing.T) {
 		if ids[i] != want[i] {
 			t.Errorf("results[%d].CallID=%q, want %q", i, ids[i], want[i])
 		}
+	}
+}
+
+func TestTools_Parallel_ResultOrderMatchesCallOrder(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{
+		{ID: "slow", Name: "s"},
+		{ID: "fast", Name: "f"},
+	}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("s", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		time.Sleep(60 * time.Millisecond)
+		return "slow-done", nil
+	})
+	exec.Register("f", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return "fast-done", nil
+	})
+
+	p, _ := pipeline.New(pipeline.Options{ToolConcurrency: 2})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	start := time.Now()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+	elapsed := time.Since(start)
+
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 || len(batches[0]) != 2 {
+		t.Fatalf("batches=%v", batches)
+	}
+	if batches[0][0].CallID != "slow" || batches[0][1].CallID != "fast" {
+		t.Errorf("order broken: %v", batches[0])
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("parallel dispatch took %v, slower than expected", elapsed)
+	}
+}
+
+func TestTools_Parallel_CapEnforced(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	calls := []pipeline.ToolCall{}
+	for i := 0; i < 4; i++ {
+		calls = append(calls, pipeline.ToolCall{ID: fmt.Sprintf("c%d", i), Name: "f"})
+	}
+	ll.Script(pipeline.EventToolCalls{Calls: calls})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	var active, maxActive int32
+	var mu sync.Mutex
+	exec := fake.NewExecutor()
+	exec.Register("f", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		time.Sleep(30 * time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil, nil
+	})
+
+	p, _ := pipeline.New(pipeline.Options{ToolConcurrency: 2})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	if maxActive > 2 {
+		t.Errorf("maxActive=%d, want <= 2 (ToolConcurrency cap violated)", maxActive)
 	}
 }
