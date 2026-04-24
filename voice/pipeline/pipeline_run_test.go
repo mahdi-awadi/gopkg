@@ -444,3 +444,41 @@ func TestTools_Serial_SingleCall(t *testing.T) {
 		t.Errorf("batches=%v", batches)
 	}
 }
+
+func TestTools_Serial_MultipleCalls_OrderPreserved(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{
+		{ID: "a", Name: "f"},
+		{ID: "b", Name: "f"},
+		{ID: "c", Name: "f"},
+	}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("f", func(_ context.Context, c pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return c.ID, nil
+	})
+
+	p, _ := pipeline.New(pipeline.Options{ToolConcurrency: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 {
+		t.Fatalf("batches=%d, want 1", len(batches))
+	}
+	ids := []string{batches[0][0].CallID, batches[0][1].CallID, batches[0][2].CallID}
+	want := []string{"a", "b", "c"}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Errorf("results[%d].CallID=%q, want %q", i, ids[i], want[i])
+		}
+	}
+}
