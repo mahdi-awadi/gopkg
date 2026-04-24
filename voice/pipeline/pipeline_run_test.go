@@ -201,6 +201,56 @@ func TestRun_InterruptedClearsAndFires(t *testing.T) {
 	}
 }
 
+func TestRun_ReasonTransportClosed(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	tr.CloseInbound() // caller hangs up
+	// LLM events stay open but blocked — we want transport-closed to win.
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run returned err=%v on clean transport close", err)
+	}
+	ev := rec.Events()
+	last, ok := ev[len(ev)-1].(fake.RecSessionEnd)
+	if !ok || last.Reason != pipeline.EndReasonTransportClosed {
+		t.Errorf("last=%+v, want RecSessionEnd{Reason=transport_closed}", ev[len(ev)-1])
+	}
+}
+
+func TestRun_ReasonLLMClosed(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.CloseEvents() // LLM ends first
+	// Transport stays open — LLM-closed should win.
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run returned err=%v on clean LLM close", err)
+	}
+	ev := rec.Events()
+	last, ok := ev[len(ev)-1].(fake.RecSessionEnd)
+	if !ok || last.Reason != pipeline.EndReasonLLMClosed {
+		t.Errorf("last=%+v, want RecSessionEnd{Reason=llm_closed}", ev[len(ev)-1])
+	}
+}
+
 func TestRun_HistoryInjectionFiresObserver(t *testing.T) {
 	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
 	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
