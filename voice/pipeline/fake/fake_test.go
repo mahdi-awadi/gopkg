@@ -226,6 +226,7 @@ func TestFakeFiller_LoopMode(t *testing.T) {
 	ff := NewFiller(pipeline.Frame{Data: []byte{42}})
 	ff.Loop() // emit forever
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	ch := ff.Frames(ctx)
 	count := 0
 	for f := range ch {
