@@ -371,3 +371,27 @@ func TestRun_FatalTransportSendError(t *testing.T) {
 		t.Errorf("Run err=%v, want 'dropped'", err)
 	}
 }
+
+func TestRun_UnknownFormatPairReturnsErrFormatBridge(t *testing.T) {
+	// Transport inbound: mulaw@16k (unsupported)
+	tr := fake.NewTransport(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 16000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1},
+	)
+	ll := fake.NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 48000, Channels: 1},
+	)
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	err := p.Run(context.Background(), tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if !errors.Is(err, pipeline.ErrFormatBridge) {
+		t.Errorf("Run err=%v, want ErrFormatBridge", err)
+	}
+	// Ensure SessionStart never fired.
+	for _, e := range rec.Events() {
+		if _, ok := e.(fake.RecSessionStart); ok {
+			t.Error("OnSessionStart must NOT fire when codec bridge fails")
+		}
+	}
+}
