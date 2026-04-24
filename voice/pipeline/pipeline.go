@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mahdi-awadi/gopkg/id"
@@ -107,22 +109,87 @@ func (p *Pipeline) Run(
 	// SessionStart fires once everything is ready to flow.
 	p.safeObserve(func() { p.opts.Observer.OnSessionStart(ctx, sess) })
 
-	// Placeholder run body — Task 14 replaces this with the full loop.
+	// Spawn the caller-audio goroutine: Transport.Receive → bridge → LLM.SendAudio.
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	runErr := error(nil)
 	endReason := EndReasonContextDone
-	var runErr error
-	select {
-	case <-runCtx.Done():
-		endReason = EndReasonContextDone
-		runErr = runCtx.Err()
-	case <-inErrs:
-	case <-llmErrs:
-	case <-inFrames:
-	case <-llmEvents:
+	var endOnce sync.Once
+	setEnd := func(r EndReason, e error) {
+		endOnce.Do(func() {
+			endReason = r
+			runErr = e
+			cancel()
+		})
 	}
 
-	_ = inboundBridge
-	_ = outboundBridge
-	_ = executor
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case f, ok := <-inFrames:
+				if !ok {
+					setEnd(EndReasonTransportClosed, nil)
+					return
+				}
+				conv, err := inboundBridge(f)
+				if err != nil {
+					setEnd(EndReasonFatalError, err)
+					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					return
+				}
+				if err := llm.SendAudio(runCtx, conv); err != nil {
+					setEnd(EndReasonFatalError, err)
+					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					return
+				}
+			case err, ok := <-inErrs:
+				if ok && err != nil {
+					setEnd(EndReasonFatalError, err)
+					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					return
+				}
+			}
+		}
+	}()
+
+	// Spawn the LLM-events goroutine.
+	go func() {
+		defer wg.Done()
+		turn := 0
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case ev, ok := <-llmEvents:
+				if !ok {
+					setEnd(EndReasonLLMClosed, nil)
+					return
+				}
+				if err := p.dispatchLLMEvent(ctx, runCtx, sess, transport, llm, executor, outboundBridge, ev, &turn); err != nil {
+					setEnd(EndReasonFatalError, err)
+					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					return
+				}
+			case err, ok := <-llmErrs:
+				if ok && err != nil {
+					setEnd(EndReasonFatalError, err)
+					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					return
+				}
+			}
+		}
+	}()
+
+	<-runCtx.Done()
+	wg.Wait()
+
+	if errors.Is(runCtx.Err(), context.Canceled) && runErr == nil && endReason == EndReasonContextDone {
+		runErr = runCtx.Err()
+	}
 
 	// Cleanup + OnSessionEnd.
 	_ = transport.Close()
@@ -139,6 +206,29 @@ func (p *Pipeline) safeObserve(fn func()) {
 		}
 	}()
 	fn()
+}
+
+// dispatchLLMEvent handles one LLMEvent emitted by the LLM. Returns a
+// non-nil error only for fatal conditions (Transport.Send failure).
+func (p *Pipeline) dispatchLLMEvent(
+	ctx, runCtx context.Context,
+	sess Session,
+	transport Transport,
+	llm LLM,
+	executor ToolExecutor,
+	outboundBridge bridgeFn,
+	ev LLMEvent,
+	turn *int,
+) error {
+	switch e := ev.(type) {
+	case EventAudioOut:
+		conv, err := outboundBridge(e.Frame)
+		if err != nil {
+			return err
+		}
+		return transport.Send(runCtx, conv)
+	}
+	return nil
 }
 
 func copyAttrs(src map[string]string) map[string]string {
