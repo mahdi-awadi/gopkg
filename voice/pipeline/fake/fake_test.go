@@ -239,3 +239,31 @@ func TestFakeFiller_LoopMode(t *testing.T) {
 		t.Errorf("loop stopped early at %d", count)
 	}
 }
+
+func TestRecorderObserver_CapturesCallbacksInOrder(t *testing.T) {
+	r := NewRecorder()
+	ctx := context.Background()
+	s := pipeline.Session{ID: "abc"}
+	r.OnSessionStart(ctx, s)
+	r.OnAssistantText(ctx, s, "hello", true)
+	r.OnToolCall(ctx, s, pipeline.ToolCall{ID: "1", Name: "ping"})
+	r.OnSessionEnd(ctx, s, pipeline.EndReasonTransportClosed)
+
+	ev := r.Events()
+	if len(ev) != 4 {
+		t.Fatalf("got %d events, want 4", len(ev))
+	}
+	if _, ok := ev[0].(RecSessionStart); !ok {
+		t.Errorf("ev[0]=%T, want RecSessionStart", ev[0])
+	}
+	if a, ok := ev[1].(RecAssistantText); !ok || a.Text != "hello" {
+		t.Errorf("ev[1]=%+v", ev[1])
+	}
+	if e, ok := ev[3].(RecSessionEnd); !ok || e.Reason != pipeline.EndReasonTransportClosed {
+		t.Errorf("ev[3]=%+v", ev[3])
+	}
+}
+
+func TestRecorderObserver_ImplementsObserver(t *testing.T) {
+	var _ pipeline.Observer = NewRecorder()
+}
