@@ -638,3 +638,68 @@ func TestHold_DoesntFireBelowDelay(t *testing.T) {
 		t.Errorf("filler fired prematurely: %d frames", len(tr.Outbound()))
 	}
 }
+
+func TestTool_PanicRecoveredAndWrappedInResult(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "boom", Name: "panicker"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("panicker", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		panic("kaboom")
+	})
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run err=%v, want nil (panic is in-band, session continues)", err)
+	}
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("batches=%v", batches)
+	}
+	if !errors.Is(batches[0][0].Err, pipeline.ErrToolExecutorPanicked) {
+		t.Errorf("Err=%v, want wrapping ErrToolExecutorPanicked", batches[0][0].Err)
+	}
+}
+
+type panickingObs struct{ pipeline.NoopObserver }
+
+func (panickingObs) OnAssistantText(context.Context, pipeline.Session, string, bool) {
+	panic("observer panic")
+}
+
+func TestObserver_PanicRecovered(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(
+		pipeline.EventAssistantText{Text: "hi", Final: true},
+		pipeline.EventTurnComplete{},
+	)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	p, _ := pipeline.New(pipeline.Options{Observer: panickingObs{}})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run err=%v, want nil (observer panic swallowed)", err)
+	}
+	if len(tr.Marks()) != 1 {
+		t.Errorf("Marks=%v, want 1 (session continued after observer panic)", tr.Marks())
+	}
+}
