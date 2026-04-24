@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -53,4 +54,100 @@ func New(opts Options) (*Pipeline, error) {
 		opts.SessionIDFunc = id.UUIDv7
 	}
 	return &Pipeline{opts: opts}, nil
+}
+
+// Run orchestrates one complete voice session. See the package doc
+// and the design spec for full semantics.
+func (p *Pipeline) Run(
+	ctx context.Context,
+	transport Transport,
+	llm LLM,
+	executor ToolExecutor,
+	setup SetupRequest,
+	attrs map[string]string,
+) error {
+	// Build the Session struct.
+	sess := Session{
+		ID:        p.opts.SessionIDFunc(),
+		StartedAt: time.Now(),
+		Attrs:     copyAttrs(attrs),
+	}
+
+	// Resolve codec bridges BEFORE any side effect. Unknown pair →
+	// fire OnError + OnSessionEnd(FatalError); Run returns wrapped err.
+	inboundBridge, err := resolveBridge(transport.InboundFormat(), llm.OutboundFormat())
+	if err != nil {
+		p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+		p.safeObserve(func() { p.opts.Observer.OnSessionEnd(ctx, sess, EndReasonFatalError) })
+		return err
+	}
+	outboundBridge, err := resolveBridge(llm.InboundFormat(), transport.OutboundFormat())
+	if err != nil {
+		p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+		p.safeObserve(func() { p.opts.Observer.OnSessionEnd(ctx, sess, EndReasonFatalError) })
+		return err
+	}
+
+	// Derive an internal context so we can cancel on early termination.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Open LLM (fires history injection internally).
+	if err := llm.Open(runCtx, setup); err != nil {
+		p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+		p.safeObserve(func() { p.opts.Observer.OnSessionEnd(ctx, sess, EndReasonFatalError) })
+		return err
+	}
+	p.safeObserve(func() { p.opts.Observer.OnHistoryInjected(ctx, sess, len(setup.History)) })
+
+	// Start transport + LLM event streams.
+	inFrames, inErrs := transport.Receive(runCtx)
+	llmEvents, llmErrs := llm.Events(runCtx)
+
+	// SessionStart fires once everything is ready to flow.
+	p.safeObserve(func() { p.opts.Observer.OnSessionStart(ctx, sess) })
+
+	// Placeholder run body — Task 14 replaces this with the full loop.
+	endReason := EndReasonContextDone
+	var runErr error
+	select {
+	case <-runCtx.Done():
+		endReason = EndReasonContextDone
+		runErr = runCtx.Err()
+	case <-inErrs:
+	case <-llmErrs:
+	case <-inFrames:
+	case <-llmEvents:
+	}
+
+	_ = inboundBridge
+	_ = outboundBridge
+	_ = executor
+
+	// Cleanup + OnSessionEnd.
+	_ = transport.Close()
+	_ = llm.Close()
+	p.safeObserve(func() { p.opts.Observer.OnSessionEnd(ctx, sess, endReason) })
+	return runErr
+}
+
+// safeObserve wraps an observer callback in panic recovery.
+func (p *Pipeline) safeObserve(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.opts.Logger.Error("pipeline: observer panic", map[string]any{"panic": r})
+		}
+	}()
+	fn()
+}
+
+func copyAttrs(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	cp := make(map[string]string, len(src))
+	for k, v := range src {
+		cp[k] = v
+	}
+	return cp
 }
