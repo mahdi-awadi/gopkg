@@ -568,3 +568,73 @@ func TestTools_Parallel_CapEnforced(t *testing.T) {
 		t.Errorf("maxActive=%d, want <= 2 (ToolConcurrency cap violated)", maxActive)
 	}
 }
+
+func TestHold_TriggersAfterDelay(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "slow", Name: "s"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("s", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		time.Sleep(150 * time.Millisecond)
+		return "done", nil
+	})
+
+	filler := fake.NewFiller(pipeline.Frame{Data: []byte{0xAA}})
+	filler.Loop()
+
+	p, _ := pipeline.New(pipeline.Options{
+		ToolConcurrency: 1,
+		HoldFillerDelay: 50 * time.Millisecond,
+		Filler:          filler,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	if len(tr.Outbound()) == 0 {
+		t.Errorf("expected filler frames on Transport, got 0")
+	}
+	if tr.Clears() == 0 {
+		t.Errorf("expected Clear after tool completed, got 0")
+	}
+}
+
+func TestHold_DoesntFireBelowDelay(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "fast", Name: "f"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("f", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return nil, nil
+	})
+
+	filler := fake.NewFiller(pipeline.Frame{Data: []byte{0xAA}})
+	filler.Loop()
+
+	p, _ := pipeline.New(pipeline.Options{
+		ToolConcurrency: 1,
+		HoldFillerDelay: 200 * time.Millisecond,
+		Filler:          filler,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	if len(tr.Outbound()) != 0 {
+		t.Errorf("filler fired prematurely: %d frames", len(tr.Outbound()))
+	}
+}
