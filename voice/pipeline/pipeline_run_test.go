@@ -102,3 +102,101 @@ func TestRun_LLMAudioFlowsToTransport_WithCodecBridge(t *testing.T) {
 		t.Errorf("bridged frame size=%d, want 160", len(out[0].Data))
 	}
 }
+
+func TestRun_EmitsCallerAndAssistantTranscripts(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(
+		pipeline.EventCallerTranscript{Text: "hello"},
+		pipeline.EventAssistantText{Text: "hi there", Final: true},
+	)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	var caller, assistant bool
+	for _, e := range rec.Events() {
+		if c, ok := e.(fake.RecCallerTranscript); ok && c.Text == "hello" {
+			caller = true
+		}
+		if a, ok := e.(fake.RecAssistantText); ok && a.Text == "hi there" && a.Final {
+			assistant = true
+		}
+	}
+	if !caller || !assistant {
+		t.Errorf("caller=%v assistant=%v", caller, assistant)
+	}
+}
+
+func TestRun_TurnCompleteEmitsMarkAndObserver(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventTurnComplete{}, pipeline.EventTurnComplete{})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	marks := tr.Marks()
+	if len(marks) != 2 || marks[0] != "turn-1" || marks[1] != "turn-2" {
+		t.Errorf("marks=%v, want [turn-1 turn-2]", marks)
+	}
+	turns := 0
+	for _, ev := range rec.Events() {
+		if tc, ok := ev.(fake.RecTurnComplete); ok {
+			turns++
+			_ = tc
+		}
+	}
+	if turns != 2 {
+		t.Errorf("turn callbacks=%d, want 2", turns)
+	}
+}
+
+func TestRun_InterruptedClearsAndFires(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventInterrupted{})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	if tr.Clears() != 1 {
+		t.Errorf("Clears()=%d, want 1", tr.Clears())
+	}
+	var gotInterrupt bool
+	for _, ev := range rec.Events() {
+		if _, ok := ev.(fake.RecInterrupted); ok {
+			gotInterrupt = true
+		}
+	}
+	if !gotInterrupt {
+		t.Error("OnInterrupted never fired")
+	}
+}

@@ -90,7 +90,12 @@ func (p *Pipeline) Run(
 		return err
 	}
 
-	// Derive an internal context so we can cancel on early termination.
+	// cancel shuts down all goroutines by canceling runCtx. It is called on:
+	//   (a) outer ctx cancellation (via runCtx being a child of ctx),
+	//   (b) fatal error in either goroutine,
+	//   (c) after wg.Wait() when both goroutines exit naturally.
+	// It is NOT called on transport close alone, so in-flight LLM events
+	// can be fully dispatched before the pipeline shuts down.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -109,93 +114,131 @@ func (p *Pipeline) Run(
 	// SessionStart fires once everything is ready to flow.
 	p.safeObserve(func() { p.opts.Observer.OnSessionStart(ctx, sess) })
 
-	// Spawn the caller-audio goroutine: Transport.Receive → bridge → LLM.SendAudio.
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	runErr := error(nil)
-	endReason := EndReasonContextDone
-	var endOnce sync.Once
-	setEnd := func(r EndReason, e error) {
+	var (
+		runErr    error
+		endReason = EndReasonContextDone
+		endMu     sync.Mutex
+		endOnce   sync.Once
+	)
+
+	// recordEnd captures the first terminal event. It does NOT cancel runCtx;
+	// fatal paths call cancel() explicitly.
+	recordEnd := func(r EndReason, e error) {
 		endOnce.Do(func() {
-			endReason = r
-			runErr = e
-			cancel()
+			endMu.Lock()
+			if ctx.Err() != nil {
+				endReason = EndReasonContextDone
+				runErr = ctx.Err()
+			} else {
+				endReason = r
+				runErr = e
+			}
+			endMu.Unlock()
 		})
 	}
 
+	// Caller-audio goroutine: Transport.Receive → bridge → LLM.SendAudio.
+	// Exits when inFrames closes (covers transport close and ctx cancellation).
+	// Does NOT check runCtx.Done — it waits for inFrames to close naturally.
+	// Fatal errors call cancel() to trigger shutdown of the other goroutine.
 	go func() {
 		defer wg.Done()
 		for {
 			select {
-			case <-runCtx.Done():
-				return
 			case f, ok := <-inFrames:
 				if !ok {
-					setEnd(EndReasonTransportClosed, nil)
+					recordEnd(EndReasonTransportClosed, nil)
 					return
 				}
 				conv, err := inboundBridge(f)
 				if err != nil {
-					setEnd(EndReasonFatalError, err)
+					recordEnd(EndReasonFatalError, err)
 					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					cancel()
 					return
 				}
 				if err := llm.SendAudio(runCtx, conv); err != nil {
-					setEnd(EndReasonFatalError, err)
+					recordEnd(EndReasonFatalError, err)
 					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					cancel()
 					return
 				}
 			case err, ok := <-inErrs:
 				if ok && err != nil {
-					setEnd(EndReasonFatalError, err)
+					recordEnd(EndReasonFatalError, err)
 					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					cancel()
 					return
 				}
 			}
 		}
 	}()
 
-	// Spawn the LLM-events goroutine.
+	// LLM-events goroutine: dispatches LLM events.
+	// Exits when llmEvents closes (covers LLM close and ctx cancellation).
+	// Does NOT check runCtx.Done — it waits for llmEvents to close naturally.
+	// Fatal errors call cancel() to trigger shutdown of the other goroutine.
 	go func() {
 		defer wg.Done()
 		turn := 0
 		for {
 			select {
-			case <-runCtx.Done():
-				return
 			case ev, ok := <-llmEvents:
 				if !ok {
-					setEnd(EndReasonLLMClosed, nil)
+					recordEnd(EndReasonLLMClosed, nil)
 					return
 				}
 				if err := p.dispatchLLMEvent(ctx, runCtx, sess, transport, llm, executor, outboundBridge, ev, &turn); err != nil {
-					setEnd(EndReasonFatalError, err)
+					recordEnd(EndReasonFatalError, err)
 					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					cancel()
 					return
 				}
 			case err, ok := <-llmErrs:
 				if ok && err != nil {
-					setEnd(EndReasonFatalError, err)
+					recordEnd(EndReasonFatalError, err)
 					p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+					cancel()
 					return
 				}
 			}
 		}
 	}()
 
-	<-runCtx.Done()
-	wg.Wait()
+	// Wait for both goroutines to exit naturally, OR for the outer context
+	// to be canceled. In the latter case, cancel runCtx to signal the goroutines
+	// to stop (which causes their channels to close via the LLM/transport adapters).
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 
-	if errors.Is(runCtx.Err(), context.Canceled) && runErr == nil && endReason == EndReasonContextDone {
-		runErr = runCtx.Err()
+	select {
+	case <-done:
+		// Both goroutines exited naturally; nothing more to do.
+	case <-ctx.Done():
+		cancel() // trigger goroutine shutdown via runCtx
+		<-done   // wait for goroutines to exit
+	}
+
+	endMu.Lock()
+	reason := endReason
+	rErr := runErr
+	endMu.Unlock()
+
+	if errors.Is(runCtx.Err(), context.Canceled) && rErr == nil && reason == EndReasonContextDone {
+		rErr = runCtx.Err()
 	}
 
 	// Cleanup + OnSessionEnd.
 	_ = transport.Close()
 	_ = llm.Close()
-	p.safeObserve(func() { p.opts.Observer.OnSessionEnd(ctx, sess, endReason) })
-	return runErr
+	p.safeObserve(func() { p.opts.Observer.OnSessionEnd(ctx, sess, reason) })
+	return rErr
 }
 
 // safeObserve wraps an observer callback in panic recovery.
@@ -227,6 +270,27 @@ func (p *Pipeline) dispatchLLMEvent(
 			return err
 		}
 		return transport.Send(runCtx, conv)
+
+	case EventAssistantText:
+		p.safeObserve(func() { p.opts.Observer.OnAssistantText(ctx, sess, e.Text, e.Final) })
+		return nil
+
+	case EventCallerTranscript:
+		p.safeObserve(func() { p.opts.Observer.OnCallerTranscript(ctx, sess, e.Text) })
+		return nil
+
+	case EventTurnComplete:
+		*turn++
+		name := "turn-" + itoa(*turn)
+		_ = transport.Mark(runCtx, name) // non-fatal
+		current := *turn
+		p.safeObserve(func() { p.opts.Observer.OnTurnComplete(ctx, sess, current) })
+		return nil
+
+	case EventInterrupted:
+		_ = transport.Clear(runCtx) // non-fatal
+		p.safeObserve(func() { p.opts.Observer.OnInterrupted(ctx, sess) })
+		return nil
 	}
 	return nil
 }
