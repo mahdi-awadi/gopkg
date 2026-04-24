@@ -703,3 +703,36 @@ func TestObserver_PanicRecovered(t *testing.T) {
 		t.Errorf("Marks=%v, want 1 (session continued after observer panic)", tr.Marks())
 	}
 }
+
+func TestConcurrent_RunSimultaneously(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	p, _ := pipeline.New(pipeline.Options{})
+
+	const N = 5
+	var wg sync.WaitGroup
+	errs := make(chan error, N)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tr := fake.NewTransport(mulaw8k, mulaw8k)
+			ll := fake.NewLLM(pcm24k, pcm16k)
+			ll.Script(pipeline.EventAssistantText{Text: "hi", Final: true})
+			ll.CloseEvents()
+			tr.CloseInbound()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			errs <- p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		if e != nil {
+			t.Errorf("concurrent Run err=%v", e)
+		}
+	}
+}
