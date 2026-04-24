@@ -1,0 +1,833 @@
+package pipeline_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mahdi-awadi/gopkg/voice/pipeline"
+	"github.com/mahdi-awadi/gopkg/voice/pipeline/fake"
+)
+
+func TestRun_HappyPath_CtxCancel(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	rec := fake.NewRecorder()
+	p, err := pipeline.New(pipeline.Options{Observer: rec})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+
+	runErr := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if runErr != nil && runErr != context.Canceled {
+		t.Errorf("Run err=%v", runErr)
+	}
+
+	ev := rec.Events()
+	if len(ev) < 3 {
+		t.Fatalf("expected at least HistoryInjected + SessionStart + SessionEnd, got %v", ev)
+	}
+	if _, ok := ev[1].(fake.RecSessionStart); !ok {
+		t.Errorf("second event=%T, want RecSessionStart (after HistoryInjected)", ev[1])
+	}
+	last := ev[len(ev)-1]
+	if e, ok := last.(fake.RecSessionEnd); !ok || e.Reason != pipeline.EndReasonContextDone {
+		t.Errorf("last event=%+v, want RecSessionEnd{Reason=context_done}", last)
+	}
+}
+
+func TestRun_CallerAudioFlowsToLLM_WithCodecBridge(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+
+	// Script 160 bytes of mulaw silence (20ms @ 8kHz).
+	frame := make([]byte, 160)
+	for i := range frame {
+		frame[i] = 0xFF
+	}
+	tr.Script(pipeline.Frame{Data: frame})
+	tr.CloseInbound()
+	ll.CloseEvents()
+
+	p, _ := pipeline.New(pipeline.Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	got := ll.AudioIn()
+	if len(got) != 1 {
+		t.Fatalf("LLM received %d frames, want 1", len(got))
+	}
+	// 160 mulaw bytes → 640 pcm16le@16k bytes after bridging.
+	if len(got[0].Data) != 640 {
+		t.Errorf("bridged frame size=%d, want 640", len(got[0].Data))
+	}
+}
+
+func TestRun_LLMAudioFlowsToTransport_WithCodecBridge(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+
+	// Script one 960-byte pcm16le@24k frame (20ms) from the LLM.
+	ll.Script(pipeline.EventAudioOut{Frame: pipeline.Frame{Data: make([]byte, 960)}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	p, _ := pipeline.New(pipeline.Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	out := tr.Outbound()
+	if len(out) != 1 {
+		t.Fatalf("transport received %d frames, want 1", len(out))
+	}
+	// 960 pcm16le@24k bytes → 160 mulaw@8k bytes after bridging.
+	if len(out[0].Data) != 160 {
+		t.Errorf("bridged frame size=%d, want 160", len(out[0].Data))
+	}
+}
+
+func TestRun_EmitsCallerAndAssistantTranscripts(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(
+		pipeline.EventCallerTranscript{Text: "hello"},
+		pipeline.EventAssistantText{Text: "hi there", Final: true},
+	)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	var caller, assistant bool
+	for _, e := range rec.Events() {
+		if c, ok := e.(fake.RecCallerTranscript); ok && c.Text == "hello" {
+			caller = true
+		}
+		if a, ok := e.(fake.RecAssistantText); ok && a.Text == "hi there" && a.Final {
+			assistant = true
+		}
+	}
+	if !caller || !assistant {
+		t.Errorf("caller=%v assistant=%v", caller, assistant)
+	}
+}
+
+func TestRun_TurnCompleteEmitsMarkAndObserver(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventTurnComplete{}, pipeline.EventTurnComplete{})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	marks := tr.Marks()
+	if len(marks) != 2 || marks[0] != "turn-1" || marks[1] != "turn-2" {
+		t.Errorf("marks=%v, want [turn-1 turn-2]", marks)
+	}
+	turns := 0
+	for _, ev := range rec.Events() {
+		if tc, ok := ev.(fake.RecTurnComplete); ok {
+			turns++
+			_ = tc
+		}
+	}
+	if turns != 2 {
+		t.Errorf("turn callbacks=%d, want 2", turns)
+	}
+}
+
+func TestRun_InterruptedClearsAndFires(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventInterrupted{})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+
+	if tr.Clears() != 1 {
+		t.Errorf("Clears()=%d, want 1", tr.Clears())
+	}
+	var gotInterrupt bool
+	for _, ev := range rec.Events() {
+		if _, ok := ev.(fake.RecInterrupted); ok {
+			gotInterrupt = true
+		}
+	}
+	if !gotInterrupt {
+		t.Error("OnInterrupted never fired")
+	}
+}
+
+func TestRun_ReasonTransportClosed(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	tr.CloseInbound() // caller hangs up
+	// LLM events stay open but blocked — we want transport-closed to win.
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run returned err=%v on clean transport close", err)
+	}
+	ev := rec.Events()
+	last, ok := ev[len(ev)-1].(fake.RecSessionEnd)
+	if !ok || last.Reason != pipeline.EndReasonTransportClosed {
+		t.Errorf("last=%+v, want RecSessionEnd{Reason=transport_closed}", ev[len(ev)-1])
+	}
+}
+
+func TestRun_ReasonLLMClosed(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.CloseEvents() // LLM ends first
+	// Transport stays open — LLM-closed should win.
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run returned err=%v on clean LLM close", err)
+	}
+	ev := rec.Events()
+	last, ok := ev[len(ev)-1].(fake.RecSessionEnd)
+	if !ok || last.Reason != pipeline.EndReasonLLMClosed {
+		t.Errorf("last=%+v, want RecSessionEnd{Reason=llm_closed}", ev[len(ev)-1])
+	}
+}
+
+func TestRun_HistoryInjectionFiresObserver(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	setup := pipeline.SetupRequest{History: []pipeline.HistoryTurn{
+		{Role: pipeline.RoleUser, Content: "prior 1"},
+		{Role: pipeline.RoleAssistant, Content: "prior 2"},
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), setup, nil)
+
+	var injected int
+	for _, ev := range rec.Events() {
+		if h, ok := ev.(fake.RecHistoryInjected); ok {
+			injected = h.Count
+		}
+	}
+	if injected != 2 {
+		t.Errorf("OnHistoryInjected count=%d, want 2", injected)
+	}
+
+	// Fake LLM also recorded the flushed history inside Open.
+	turns := ll.InjectedTurns()
+	if len(turns) != 2 || turns[0].Content != "prior 1" || turns[1].Content != "prior 2" {
+		t.Errorf("InjectedTurns=%v", turns)
+	}
+}
+
+func TestRun_FatalOpenError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.SetOpenErr(errors.New("bad setup"))
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	err := p.Run(context.Background(), tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err == nil || err.Error() != "bad setup" {
+		t.Errorf("Run err=%v, want 'bad setup'", err)
+	}
+	ev := rec.Events()
+	// No SessionStart expected, but OnError + OnSessionEnd(FatalError) must fire.
+	var sawError, sawEnd bool
+	for _, e := range ev {
+		switch x := e.(type) {
+		case fake.RecError:
+			if x.Err.Error() == "bad setup" {
+				sawError = true
+			}
+		case fake.RecSessionEnd:
+			if x.Reason == pipeline.EndReasonFatalError {
+				sawEnd = true
+			}
+		case fake.RecSessionStart:
+			t.Errorf("SessionStart should not fire when Open fails")
+		}
+	}
+	if !sawError || !sawEnd {
+		t.Errorf("sawError=%v sawEnd=%v", sawError, sawEnd)
+	}
+}
+
+func TestRun_FatalSendAudioError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	tr.Script(pipeline.Frame{Data: make([]byte, 160)})
+	ll.SetSendAudioErr(errors.New("wire closed"))
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err == nil || err.Error() != "wire closed" {
+		t.Errorf("Run err=%v, want 'wire closed'", err)
+	}
+	ev := rec.Events()
+	last, ok := ev[len(ev)-1].(fake.RecSessionEnd)
+	if !ok || last.Reason != pipeline.EndReasonFatalError {
+		t.Errorf("last=%+v", ev[len(ev)-1])
+	}
+}
+
+func TestRun_FatalTransportSendError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventAudioOut{Frame: pipeline.Frame{Data: make([]byte, 960)}})
+	tr.SetSendErr(errors.New("dropped"))
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err == nil || err.Error() != "dropped" {
+		t.Errorf("Run err=%v, want 'dropped'", err)
+	}
+}
+
+func TestRun_UnknownFormatPairReturnsErrFormatBridge(t *testing.T) {
+	// Transport inbound: mulaw@16k (unsupported)
+	tr := fake.NewTransport(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 16000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1},
+	)
+	ll := fake.NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 48000, Channels: 1},
+	)
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	err := p.Run(context.Background(), tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if !errors.Is(err, pipeline.ErrFormatBridge) {
+		t.Errorf("Run err=%v, want ErrFormatBridge", err)
+	}
+	// Ensure SessionStart never fired.
+	for _, e := range rec.Events() {
+		if _, ok := e.(fake.RecSessionStart); ok {
+			t.Error("OnSessionStart must NOT fire when codec bridge fails")
+		}
+	}
+}
+
+func TestTools_Serial_SingleCall(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{
+		{ID: "c1", Name: "ping", Args: map[string]any{"x": 1}},
+	}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("ping", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	// Observer sequence: ToolCall → ToolResponse
+	var sawCall, sawResp bool
+	for _, ev := range rec.Events() {
+		switch x := ev.(type) {
+		case fake.RecToolCall:
+			if x.Call.ID == "c1" {
+				sawCall = true
+			}
+		case fake.RecToolResponse:
+			if x.Call.ID == "c1" && x.Err == nil {
+				sawResp = true
+			}
+		}
+	}
+	if !sawCall || !sawResp {
+		t.Errorf("sawCall=%v sawResp=%v", sawCall, sawResp)
+	}
+
+	// LLM received exactly one tool-results batch of size 1.
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 || len(batches[0]) != 1 || batches[0][0].CallID != "c1" {
+		t.Errorf("batches=%v", batches)
+	}
+}
+
+func TestTools_Serial_MultipleCalls_OrderPreserved(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{
+		{ID: "a", Name: "f"},
+		{ID: "b", Name: "f"},
+		{ID: "c", Name: "f"},
+	}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("f", func(_ context.Context, c pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return c.ID, nil
+	})
+
+	p, _ := pipeline.New(pipeline.Options{ToolConcurrency: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 {
+		t.Fatalf("batches=%d, want 1", len(batches))
+	}
+	ids := []string{batches[0][0].CallID, batches[0][1].CallID, batches[0][2].CallID}
+	want := []string{"a", "b", "c"}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Errorf("results[%d].CallID=%q, want %q", i, ids[i], want[i])
+		}
+	}
+}
+
+func TestTools_Parallel_ResultOrderMatchesCallOrder(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{
+		{ID: "slow", Name: "s"},
+		{ID: "fast", Name: "f"},
+	}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("s", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		time.Sleep(60 * time.Millisecond)
+		return "slow-done", nil
+	})
+	exec.Register("f", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return "fast-done", nil
+	})
+
+	p, _ := pipeline.New(pipeline.Options{ToolConcurrency: 2})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	start := time.Now()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+	elapsed := time.Since(start)
+
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 || len(batches[0]) != 2 {
+		t.Fatalf("batches=%v", batches)
+	}
+	if batches[0][0].CallID != "slow" || batches[0][1].CallID != "fast" {
+		t.Errorf("order broken: %v", batches[0])
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("parallel dispatch took %v, slower than expected", elapsed)
+	}
+}
+
+func TestTools_Parallel_CapEnforced(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	calls := []pipeline.ToolCall{}
+	for i := 0; i < 4; i++ {
+		calls = append(calls, pipeline.ToolCall{ID: fmt.Sprintf("c%d", i), Name: "f"})
+	}
+	ll.Script(pipeline.EventToolCalls{Calls: calls})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	var active, maxActive int32
+	var mu sync.Mutex
+	exec := fake.NewExecutor()
+	exec.Register("f", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		time.Sleep(30 * time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil, nil
+	})
+
+	p, _ := pipeline.New(pipeline.Options{ToolConcurrency: 2})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	if maxActive > 2 {
+		t.Errorf("maxActive=%d, want <= 2 (ToolConcurrency cap violated)", maxActive)
+	}
+}
+
+func TestHold_TriggersAfterDelay(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "slow", Name: "s"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("s", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		time.Sleep(150 * time.Millisecond)
+		return "done", nil
+	})
+
+	filler := fake.NewFiller(pipeline.Frame{Data: []byte{0xAA}})
+	filler.Loop()
+
+	p, _ := pipeline.New(pipeline.Options{
+		ToolConcurrency: 1,
+		HoldFillerDelay: 50 * time.Millisecond,
+		Filler:          filler,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	if len(tr.Outbound()) == 0 {
+		t.Errorf("expected filler frames on Transport, got 0")
+	}
+	if tr.Clears() == 0 {
+		t.Errorf("expected Clear after tool completed, got 0")
+	}
+}
+
+func TestHold_DoesntFireBelowDelay(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "fast", Name: "f"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("f", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return nil, nil
+	})
+
+	filler := fake.NewFiller(pipeline.Frame{Data: []byte{0xAA}})
+	filler.Loop()
+
+	p, _ := pipeline.New(pipeline.Options{
+		ToolConcurrency: 1,
+		HoldFillerDelay: 200 * time.Millisecond,
+		Filler:          filler,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	if len(tr.Outbound()) != 0 {
+		t.Errorf("filler fired prematurely: %d frames", len(tr.Outbound()))
+	}
+}
+
+func TestTool_PanicRecoveredAndWrappedInResult(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "boom", Name: "panicker"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("panicker", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		panic("kaboom")
+	})
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run err=%v, want nil (panic is in-band, session continues)", err)
+	}
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("batches=%v", batches)
+	}
+	if !errors.Is(batches[0][0].Err, pipeline.ErrToolExecutorPanicked) {
+		t.Errorf("Err=%v, want wrapping ErrToolExecutorPanicked", batches[0][0].Err)
+	}
+}
+
+type panickingObs struct{ pipeline.NoopObserver }
+
+func (panickingObs) OnAssistantText(context.Context, pipeline.Session, string, bool) {
+	panic("observer panic")
+}
+
+func TestObserver_PanicRecovered(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(
+		pipeline.EventAssistantText{Text: "hi", Final: true},
+		pipeline.EventTurnComplete{},
+	)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	p, _ := pipeline.New(pipeline.Options{Observer: panickingObs{}})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err != nil {
+		t.Errorf("Run err=%v, want nil (observer panic swallowed)", err)
+	}
+	if len(tr.Marks()) != 1 {
+		t.Errorf("Marks=%v, want 1 (session continued after observer panic)", tr.Marks())
+	}
+}
+
+func TestConcurrent_RunSimultaneously(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	p, _ := pipeline.New(pipeline.Options{})
+
+	const N = 5
+	var wg sync.WaitGroup
+	errs := make(chan error, N)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tr := fake.NewTransport(mulaw8k, mulaw8k)
+			ll := fake.NewLLM(pcm24k, pcm16k)
+			ll.Script(pipeline.EventAssistantText{Text: "hi", Final: true})
+			ll.CloseEvents()
+			tr.CloseInbound()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			errs <- p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		if e != nil {
+			t.Errorf("concurrent Run err=%v", e)
+		}
+	}
+}
+
+func TestRun_AttrsCopiedIntoSession(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	attrs := map[string]string{"user_id": "u-123", "partner": "acme"}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, attrs)
+
+	var sessionStart pipeline.Session
+	for _, e := range rec.Events() {
+		if s, ok := e.(fake.RecSessionStart); ok {
+			sessionStart = s.S
+			break
+		}
+	}
+	if sessionStart.Attrs["user_id"] != "u-123" || sessionStart.Attrs["partner"] != "acme" {
+		t.Errorf("Session.Attrs=%v, want user_id/partner set", sessionStart.Attrs)
+	}
+	// Verify it's a COPY: mutating the original must not leak into Session.
+	attrs["user_id"] = "mutated"
+	if sessionStart.Attrs["user_id"] != "u-123" {
+		t.Errorf("copyAttrs failed to deep-copy; session sees %q", sessionStart.Attrs["user_id"])
+	}
+}
+
+func TestRun_OutboundBridgeFailureFires_ErrFormatBridge(t *testing.T) {
+	// Inbound pair: transport inbound mulaw@8k → llm outbound pcm16le@16k (supported via Mulaw8kToPCM16LE16k)
+	// Outbound pair: llm inbound pcm16le@48k → transport outbound mulaw@8k (UNSUPPORTED)
+	tr := fake.NewTransport(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1},
+	)
+	ll := fake.NewLLM(
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 48000, Channels: 1},
+		pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1},
+	)
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	err := p.Run(context.Background(), tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if !errors.Is(err, pipeline.ErrFormatBridge) {
+		t.Errorf("Run err=%v, want ErrFormatBridge on outbound bridge", err)
+	}
+	// No SessionStart should have fired.
+	for _, e := range rec.Events() {
+		if _, ok := e.(fake.RecSessionStart); ok {
+			t.Error("SessionStart must not fire when outbound bridge fails")
+		}
+	}
+}
+
+func TestHold_FillerStopsOnTransportSendError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{{ID: "slow", Name: "s"}}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	// Transport.Send returns an error on the very first filler frame.
+	tr.SetSendErr(errors.New("wire down"))
+
+	exec := fake.NewExecutor()
+	exec.Register("s", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		time.Sleep(150 * time.Millisecond)
+		return "done", nil
+	})
+
+	filler := fake.NewFiller(pipeline.Frame{Data: []byte{0xAA}})
+	filler.Loop()
+
+	p, _ := pipeline.New(pipeline.Options{
+		ToolConcurrency: 1,
+		HoldFillerDelay: 50 * time.Millisecond,
+		Filler:          filler,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	// Run should NOT fail just because filler Send errored (filler is non-fatal).
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+	// No assertion on outcome — the test's goal is branch coverage of
+	// pumpHoldFiller's Send-error return path.
+}

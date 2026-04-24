@@ -44,5 +44,6 @@ use (
 	./storage/r2
 	./stringcase
 	./validate
+	./voice/pipeline
 	./workerpool
 )
