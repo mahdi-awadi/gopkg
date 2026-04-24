@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -286,5 +287,87 @@ func TestRun_HistoryInjectionFiresObserver(t *testing.T) {
 	turns := ll.InjectedTurns()
 	if len(turns) != 2 || turns[0].Content != "prior 1" || turns[1].Content != "prior 2" {
 		t.Errorf("InjectedTurns=%v", turns)
+	}
+}
+
+func TestRun_FatalOpenError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.SetOpenErr(errors.New("bad setup"))
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	err := p.Run(context.Background(), tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err == nil || err.Error() != "bad setup" {
+		t.Errorf("Run err=%v, want 'bad setup'", err)
+	}
+	ev := rec.Events()
+	// No SessionStart expected, but OnError + OnSessionEnd(FatalError) must fire.
+	var sawError, sawEnd bool
+	for _, e := range ev {
+		switch x := e.(type) {
+		case fake.RecError:
+			if x.Err.Error() == "bad setup" {
+				sawError = true
+			}
+		case fake.RecSessionEnd:
+			if x.Reason == pipeline.EndReasonFatalError {
+				sawEnd = true
+			}
+		case fake.RecSessionStart:
+			t.Errorf("SessionStart should not fire when Open fails")
+		}
+	}
+	if !sawError || !sawEnd {
+		t.Errorf("sawError=%v sawEnd=%v", sawError, sawEnd)
+	}
+}
+
+func TestRun_FatalSendAudioError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	tr.Script(pipeline.Frame{Data: make([]byte, 160)})
+	ll.SetSendAudioErr(errors.New("wire closed"))
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err == nil || err.Error() != "wire closed" {
+		t.Errorf("Run err=%v, want 'wire closed'", err)
+	}
+	ev := rec.Events()
+	last, ok := ev[len(ev)-1].(fake.RecSessionEnd)
+	if !ok || last.Reason != pipeline.EndReasonFatalError {
+		t.Errorf("last=%+v", ev[len(ev)-1])
+	}
+}
+
+func TestRun_FatalTransportSendError(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventAudioOut{Frame: pipeline.Frame{Data: make([]byte, 960)}})
+	tr.SetSendErr(errors.New("dropped"))
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := p.Run(ctx, tr, ll, fake.NewExecutor(), pipeline.SetupRequest{}, nil)
+	if err == nil || err.Error() != "dropped" {
+		t.Errorf("Run err=%v, want 'dropped'", err)
 	}
 }
