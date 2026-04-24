@@ -395,3 +395,52 @@ func TestRun_UnknownFormatPairReturnsErrFormatBridge(t *testing.T) {
 		}
 	}
 }
+
+func TestTools_Serial_SingleCall(t *testing.T) {
+	mulaw8k := pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+	pcm16k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
+	pcm24k := pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+
+	tr := fake.NewTransport(mulaw8k, mulaw8k)
+	ll := fake.NewLLM(pcm24k, pcm16k)
+	ll.Script(pipeline.EventToolCalls{Calls: []pipeline.ToolCall{
+		{ID: "c1", Name: "ping", Args: map[string]any{"x": 1}},
+	}})
+	ll.CloseEvents()
+	tr.CloseInbound()
+
+	exec := fake.NewExecutor()
+	exec.Register("ping", func(_ context.Context, _ pipeline.ToolCall, _ pipeline.Session) (any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+
+	rec := fake.NewRecorder()
+	p, _ := pipeline.New(pipeline.Options{Observer: rec})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = p.Run(ctx, tr, ll, exec, pipeline.SetupRequest{}, nil)
+
+	// Observer sequence: ToolCall → ToolResponse
+	var sawCall, sawResp bool
+	for _, ev := range rec.Events() {
+		switch x := ev.(type) {
+		case fake.RecToolCall:
+			if x.Call.ID == "c1" {
+				sawCall = true
+			}
+		case fake.RecToolResponse:
+			if x.Call.ID == "c1" && x.Err == nil {
+				sawResp = true
+			}
+		}
+	}
+	if !sawCall || !sawResp {
+		t.Errorf("sawCall=%v sawResp=%v", sawCall, sawResp)
+	}
+
+	// LLM received exactly one tool-results batch of size 1.
+	batches := ll.ToolResultsIn()
+	if len(batches) != 1 || len(batches[0]) != 1 || batches[0][0].CallID != "c1" {
+		t.Errorf("batches=%v", batches)
+	}
+}

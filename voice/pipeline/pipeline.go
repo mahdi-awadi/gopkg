@@ -291,8 +291,100 @@ func (p *Pipeline) dispatchLLMEvent(
 		_ = transport.Clear(runCtx) // non-fatal
 		p.safeObserve(func() { p.opts.Observer.OnInterrupted(ctx, sess) })
 		return nil
+
+	case EventToolCalls:
+		p.dispatchToolCalls(ctx, runCtx, sess, transport, llm, executor, e.Calls)
+		return nil
 	}
 	return nil
+}
+
+// dispatchToolCalls executes a batch of tool calls with concurrency
+// bounded by Options.ToolConcurrency, streams the HoldFiller after
+// HoldFillerDelay, and flushes results to the LLM in call-order.
+func (p *Pipeline) dispatchToolCalls(
+	ctx, runCtx context.Context,
+	sess Session,
+	transport Transport,
+	llm LLM,
+	executor ToolExecutor,
+	calls []ToolCall,
+) {
+	// Fire OnToolCall for every call in order.
+	for _, c := range calls {
+		call := c
+		p.safeObserve(func() { p.opts.Observer.OnToolCall(ctx, sess, call) })
+	}
+
+	results := make([]ToolResult, len(calls))
+	done := make(chan struct{})
+	holdCtx, holdCancel := context.WithCancel(runCtx)
+
+	// Hold-filler watchdog.
+	go func() {
+		select {
+		case <-done:
+			return
+		case <-time.After(p.opts.HoldFillerDelay):
+			p.pumpHoldFiller(holdCtx, transport)
+		}
+	}()
+
+	sem := make(chan struct{}, p.opts.ToolConcurrency)
+	var wg sync.WaitGroup
+	for i, c := range calls {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, call ToolCall) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					results[idx] = ToolResult{
+						CallID: call.ID,
+						Err:    fmt.Errorf("%w: %v", ErrToolExecutorPanicked, r),
+					}
+				}
+			}()
+			data, err := executor.Execute(runCtx, call, sess)
+			results[idx] = ToolResult{CallID: call.ID, Data: data, Err: err}
+		}(i, c)
+	}
+	wg.Wait()
+	close(done)
+	holdCancel()
+	_ = transport.Clear(runCtx) // flush any leftover filler audio
+
+	// OnToolResponse in call-order.
+	for i := range calls {
+		call := calls[i]
+		res := results[i]
+		p.safeObserve(func() { p.opts.Observer.OnToolResponse(ctx, sess, call, res.Data, res.Err) })
+	}
+
+	if err := llm.SendToolResults(runCtx, results); err != nil {
+		p.safeObserve(func() { p.opts.Observer.OnError(ctx, sess, err) })
+	}
+}
+
+// pumpHoldFiller reads HoldFiller.Frames(holdCtx) and forwards every
+// frame to Transport.Send. Exits when the filler channel closes or
+// holdCtx is cancelled.
+func (p *Pipeline) pumpHoldFiller(holdCtx context.Context, transport Transport) {
+	ch := p.opts.Filler.Frames(holdCtx)
+	for {
+		select {
+		case <-holdCtx.Done():
+			return
+		case f, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := transport.Send(holdCtx, f); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func copyAttrs(src map[string]string) map[string]string {
