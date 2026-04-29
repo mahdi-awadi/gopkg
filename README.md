@@ -18,6 +18,10 @@ Reusable Go packages. Small, focused, zero-to-minimal third-party dependencies.
 | `communication/voice/twilio` | `github.com/mahdi-awadi/gopkg/communication/voice/twilio` | Twilio Voice flash-call adapter |
 | `communication/whatsapp/meta` | `github.com/mahdi-awadi/gopkg/communication/whatsapp/meta` | Meta Cloud API WhatsApp adapter |
 | `communication/whatsapp/twilio` | `github.com/mahdi-awadi/gopkg/communication/whatsapp/twilio` | WhatsApp-over-Twilio adapter |
+| `voice/pipeline` | `github.com/mahdi-awadi/gopkg/voice/pipeline` | Realtime telephony-to-LLM voice pipeline |
+| `voice/transport/twilio` | `github.com/mahdi-awadi/gopkg/voice/transport/twilio` | Twilio Media Streams transport for `voice/pipeline` |
+| `voice/llm/gemini` | `github.com/mahdi-awadi/gopkg/voice/llm/gemini` | Gemini Live LLM adapter for `voice/pipeline` |
+| `voice/holdfiller/tone` | `github.com/mahdi-awadi/gopkg/voice/holdfiller/tone` | Mu-law hold-tone filler for `voice/pipeline` |
 | `clock` | `github.com/mahdi-awadi/gopkg/clock` | Time abstraction (Real + Mock) for testability |
 | `environment` | `github.com/mahdi-awadi/gopkg/environment` | Standard ENVIRONMENT env-var helper |
 | `errorsx` | `github.com/mahdi-awadi/gopkg/errorsx` | Error-kind taxonomy with HTTP status mapping |

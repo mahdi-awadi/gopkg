@@ -1,4 +1,4 @@
-go 1.23
+go 1.25.0
 
 use (
 	./audio/codec
@@ -44,6 +44,9 @@ use (
 	./storage/r2
 	./stringcase
 	./validate
+	./voice/holdfiller/tone
+	./voice/llm/gemini
 	./voice/pipeline
+	./voice/transport/twilio
 	./workerpool
 )
