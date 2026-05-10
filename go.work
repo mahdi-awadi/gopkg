@@ -47,6 +47,7 @@ use (
 	./voice/holdfiller/twilio
 	./voice/llm/gemini
 	./voice/pipeline
+	./voice/toolexec
 	./voice/transport/twilio
 	./workerpool
 )
