@@ -129,6 +129,9 @@ func TestLLM_Open_SendsSetupAndReadsSetupComplete(t *testing.T) {
 	if gotSetup.Setup.InputAudioTranscription == nil {
 		t.Errorf("InputAudioTranscription missing (must be at setup level, not generationConfig)")
 	}
+	if gotSetup.Setup.OutputAudioTranscription == nil {
+		t.Errorf("OutputAudioTranscription missing (must be at setup level, not generationConfig)")
+	}
 	if gotSetup.Setup.SystemInstruction == nil ||
 		len(gotSetup.Setup.SystemInstruction.Parts) == 0 ||
 		gotSetup.Setup.SystemInstruction.Parts[0].Text != testSystemPrompt {
@@ -490,6 +493,38 @@ func TestLLM_Events_TranslatesAudioOutAndText_AndFinalOnTurnComplete(t *testing.
 	}
 	if !turnDone {
 		t.Errorf("no EventTurnComplete: %+v", got)
+	}
+}
+
+func TestLLM_Events_TranslatesOutputTranscriptionToAssistantText(t *testing.T) {
+	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteJSON(GeminiServerMessage{
+			ServerContent: &GeminiServerContent{
+				OutputTranscription: &GeminiTranscription{Text: "hello from audio"},
+			},
+		})
+		_ = conn.WriteJSON(GeminiServerMessage{
+			ServerContent: &GeminiServerContent{TurnComplete: true},
+		})
+		_ = conn.Close()
+	})
+	defer cleanup()
+	if err := llm.Open(context.Background(), setupReq()); err != nil {
+		t.Fatal(err)
+	}
+	got := drainEvents(t, llm, 500*time.Millisecond)
+
+	var finalText bool
+	for _, ev := range got {
+		if at, ok := ev.(pipeline.EventAssistantText); ok && at.Final && at.Text == "hello from audio" {
+			finalText = true
+		}
+	}
+	if !finalText {
+		t.Errorf("events=%+v, want final EventAssistantText from outputTranscription", got)
 	}
 }
 

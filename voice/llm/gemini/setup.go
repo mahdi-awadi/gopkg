@@ -28,9 +28,10 @@ func BuildSetup(systemPrompt string, tools []pipeline.ToolDecl) GeminiSetup {
 					},
 				},
 			},
-			SystemInstruction:       &GeminiContent{Parts: []GeminiPart{{Text: systemPrompt}}},
-			Tools:                   wireTools,
-			InputAudioTranscription: &struct{}{},
+			SystemInstruction:        &GeminiContent{Parts: []GeminiPart{{Text: systemPrompt}}},
+			Tools:                    wireTools,
+			InputAudioTranscription:  &struct{}{},
+			OutputAudioTranscription: &struct{}{},
 		},
 	}
 }

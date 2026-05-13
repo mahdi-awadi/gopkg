@@ -30,11 +30,12 @@ type GeminiSetup struct {
 // rejects `setup.generationConfig.inputAudioTranscription` with
 // "Cannot find field" — it's a top-level sibling of generationConfig.
 type GeminiSetupConfig struct {
-	Model                   string                 `json:"model"`
-	GenerationConfig        GeminiGenerationConfig `json:"generationConfig"`
-	SystemInstruction       *GeminiContent         `json:"systemInstruction,omitempty"`
-	Tools                   []GeminiTool           `json:"tools,omitempty"`
-	InputAudioTranscription *struct{}              `json:"inputAudioTranscription,omitempty"`
+	Model                    string                 `json:"model"`
+	GenerationConfig         GeminiGenerationConfig `json:"generationConfig"`
+	SystemInstruction        *GeminiContent         `json:"systemInstruction,omitempty"`
+	Tools                    []GeminiTool           `json:"tools,omitempty"`
+	InputAudioTranscription  *struct{}              `json:"inputAudioTranscription,omitempty"`
+	OutputAudioTranscription *struct{}              `json:"outputAudioTranscription,omitempty"`
 }
 
 type GeminiGenerationConfig struct {
@@ -118,10 +119,11 @@ type GeminiServerMessage struct {
 }
 
 type GeminiServerContent struct {
-	ModelTurn          *GeminiContent       `json:"modelTurn,omitempty"`
-	TurnComplete       bool                 `json:"turnComplete,omitempty"`
-	Interrupted        bool                 `json:"interrupted,omitempty"`
-	InputTranscription *GeminiTranscription `json:"inputTranscription,omitempty"`
+	ModelTurn           *GeminiContent       `json:"modelTurn,omitempty"`
+	TurnComplete        bool                 `json:"turnComplete,omitempty"`
+	Interrupted         bool                 `json:"interrupted,omitempty"`
+	InputTranscription  *GeminiTranscription `json:"inputTranscription,omitempty"`
+	OutputTranscription *GeminiTranscription `json:"outputTranscription,omitempty"`
 }
 
 type GeminiTranscription struct {

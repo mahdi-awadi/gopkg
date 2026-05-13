@@ -163,13 +163,14 @@ func (l *LLM) InjectTurn(_ context.Context, turn pipeline.HistoryTurn) error {
 //
 // Per-message translation rules:
 //   - serverContent.inputTranscription.text → EventCallerTranscript
+//   - serverContent.outputTranscription.text → EventAssistantText{Final:false}
 //   - serverContent.modelTurn.parts[i].inlineData.data → EventAudioOut
 //     (one event per part; Data is raw base64-decoded pcm16@24k bytes)
 //   - serverContent.modelTurn.parts[i].text → EventAssistantText{Final:false}
 //     (streaming); accumulated per turn and re-emitted with Final:true
 //     on turnComplete
 //   - serverContent.turnComplete → (flush accumulated text as Final:true)
-//     + EventTurnComplete
+//   - EventTurnComplete
 //   - serverContent.interrupted → EventInterrupted
 //   - toolCall.functionCalls → EventToolCalls
 func (l *LLM) Events(ctx context.Context) (<-chan pipeline.LLMEvent, <-chan error) {
@@ -211,6 +212,12 @@ func (l *LLM) Events(ctx context.Context) (<-chan pipeline.LLMEvent, <-chan erro
 			if msg.ServerContent != nil {
 				if tx := msg.ServerContent.InputTranscription; tx != nil && tx.Text != "" {
 					if !emit(pipeline.EventCallerTranscript{Text: tx.Text}) {
+						return
+					}
+				}
+				if tx := msg.ServerContent.OutputTranscription; tx != nil && tx.Text != "" {
+					turnText.WriteString(tx.Text)
+					if !emit(pipeline.EventAssistantText{Text: tx.Text, Final: false}) {
 						return
 					}
 				}
