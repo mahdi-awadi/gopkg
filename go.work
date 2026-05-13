@@ -1,6 +1,12 @@
-go 1.25.0
+go 1.26
 
 use (
+	./communication/telegram/bot
+	./communication/router
+	./ai/llm/geminitext
+	./ai/orchestrator
+	./ai/conversation
+	./ai/llm
 	./audio/codec
 	./bus
 	./bus/nats
