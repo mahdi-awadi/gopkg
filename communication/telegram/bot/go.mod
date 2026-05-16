@@ -4,8 +4,6 @@ go 1.26
 
 replace github.com/mahdi-awadi/eticket-v3/services/common => /home/eticket-v3/services/common
 
-replace github.com/mahdi-awadi/gopkg/ai/conversation => /home/gopkg/ai/conversation
-
 require (
 	github.com/google/uuid v1.6.0
 	github.com/mahdi-awadi/eticket-v3/services/common v0.0.0-00010101000000-000000000000
