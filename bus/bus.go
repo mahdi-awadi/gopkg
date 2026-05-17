@@ -92,4 +92,3 @@ type Broker interface {
 type Subscription interface {
 	Stop()
 }
-
