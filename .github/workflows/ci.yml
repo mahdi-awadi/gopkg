@@ -19,6 +19,10 @@ jobs:
     defaults:
       run:
         working-directory: ${{ matrix.module }}
+    env:
+      # Each matrix entry is an independently versioned Go module. Do not let
+      # the repository-level go.work pull unrelated modules into these jobs.
+      GOWORK: off
     steps:
       - uses: actions/checkout@v4
 
