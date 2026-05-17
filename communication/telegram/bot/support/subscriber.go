@@ -7,8 +7,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/mahdi-awadi/eticket-v3/services/common/broker"
 	commonNats "github.com/mahdi-awadi/eticket-v3/services/common/nats"
+	broker "github.com/mahdi-awadi/gopkg/bus"
 )
 
 // BotSender is the interface the subscriber uses to send Telegram DMs.

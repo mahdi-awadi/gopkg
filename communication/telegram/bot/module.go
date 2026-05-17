@@ -10,8 +10,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"github.com/mahdi-awadi/eticket-v3/services/common/broker"
 	"github.com/mahdi-awadi/eticket-v3/services/common/conversation"
+	broker "github.com/mahdi-awadi/gopkg/bus"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/auth"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/client"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/core"

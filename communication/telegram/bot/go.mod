@@ -2,11 +2,10 @@ module github.com/mahdi-awadi/gopkg/communication/telegram/bot
 
 go 1.26
 
-replace github.com/mahdi-awadi/eticket-v3/services/common => /home/eticket-v3/services/common
-
 require (
 	github.com/google/uuid v1.6.0
 	github.com/mahdi-awadi/eticket-v3/services/common v0.0.0-00010101000000-000000000000
+	github.com/mahdi-awadi/gopkg/bus v0.1.0
 	github.com/redis/go-redis/v9 v9.18.0
 	go.uber.org/zap v1.28.0
 	gopkg.in/telebot.v4 v4.0.0-beta.8
