@@ -5,9 +5,10 @@
 // mulaw@8k).
 //
 // The package is domain-neutral: callers supply the system prompt and
-// tool list via pipeline.SetupRequest. An optional realtime greeting
-// trigger may be passed in SetupRequest.Extra["greeting_trigger"]
-// (string).
+// tool list via pipeline.SetupRequest. An optional wake signal — a
+// non-natural-language tag like "[CALL_CONNECTED]" — may be passed in
+// SetupRequest.Extra["wake_signal"] (string) to make the model produce
+// its first response without waiting for caller speech.
 package gemini
 
 // Wire-format constants. LiveModel + VoiceName match the Gemini Live API
@@ -80,8 +81,8 @@ type GeminiFunctionDecl struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
-// GeminiClientContent drives history replay and the initial greeting
-// trigger (role="user", text=…).
+// GeminiClientContent drives history replay and the initial wake
+// signal (role="user", text=…).
 type GeminiClientContent struct {
 	ClientContent GeminiClientContentData `json:"clientContent"`
 }
