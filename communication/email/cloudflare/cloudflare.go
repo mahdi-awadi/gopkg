@@ -162,14 +162,14 @@ func (p *Provider) send(ctx context.Context, req *provider.SendRequest, atts []p
 			code = parsed.Errors[0].Code
 			msg = code + ": " + parsed.Errors[0].Message
 		}
-		return nil, provider.NewProviderError(ProviderCode, code, msg, code == "E_TRANSPORT", nil)
+		return nil, provider.NewProviderError(ProviderCode, code, msg, resp.StatusCode >= 500, nil)
 	}
 	return &provider.SendResponse{Success: true, ProviderCode: ProviderCode, ProviderMessageID: parsed.Result.ID}, nil
 }
 
 // GetStatus is not supported by the send API; report unknown.
 func (p *Provider) GetStatus(ctx context.Context, messageID string) (*provider.DeliveryStatus, error) {
-	return &provider.DeliveryStatus{MessageID: messageID, Status: provider.Status("unknown")}, nil
+	return &provider.DeliveryStatus{MessageID: messageID, Status: provider.StatusUnknown}, nil
 }
 
 func base64Std(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
