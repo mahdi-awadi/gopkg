@@ -1,6 +1,22 @@
 go 1.26
 
 use (
+	./ai/conversation
+	./ai/llm
+	./ai/llm/geminitext
+	./ai/orchestrator
+	./audio/codec
+	./bus
+	./bus/nats
+	./cache/lru
+	./circuitbreaker
+	./clock
+	./communication/email/cloudflare
+	./communication/email/sendgrid
+	./communication/email/ses
+	./communication/provider
+	./communication/push/expo
+	./communication/push/fcm
 	// ./communication/telegram/bot — temporarily excluded from the workspace.
 	// The module still has a `replace eticket-v3/services/common => /home/...`
 	// directive (path doesn't exist on CI), and including it in the workspace
@@ -10,21 +26,6 @@ use (
 	// build there. Removing the eticket-v3 coupling is tracked in
 	// eticket-v3/docs/superpowers/specs/2026-05-16-gopkg-telegram-bot-extraction-design.md.
 	./communication/router
-	./ai/llm/geminitext
-	./ai/orchestrator
-	./ai/conversation
-	./ai/llm
-	./audio/codec
-	./bus
-	./bus/nats
-	./cache/lru
-	./circuitbreaker
-	./clock
-	./communication/email/sendgrid
-	./communication/email/ses
-	./communication/provider
-	./communication/push/expo
-	./communication/push/fcm
 	./communication/sms/twilio
 	./communication/telegram
 	./communication/voice/twilio
