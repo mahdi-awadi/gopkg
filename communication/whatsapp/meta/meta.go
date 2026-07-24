@@ -43,6 +43,10 @@ type Config struct {
 	AccessToken string
 	// GraphAPIBase overrides the default graph.facebook.com URL (useful for tests).
 	GraphAPIBase string
+	// AppSecret is the Meta App secret, used to verify inbound webhook
+	// X-Hub-Signature-256 signatures. Optional for the send/calling paths;
+	// required only for VerifySignature.
+	AppSecret string
 	// Timeout for individual HTTP requests. Zero means 15 seconds.
 	Timeout time.Duration
 }
