@@ -200,12 +200,7 @@ func toolDecls(tools []llm.ToolDecl) []geminiFunction {
 	for _, t := range tools {
 		props := make(map[string]geminiFunctionProperty, len(t.Parameters.Properties))
 		for name, p := range t.Parameters.Properties {
-			props[name] = geminiFunctionProperty{
-				Type:        p.Type,
-				Description: p.Description,
-				Enum:        p.Enum,
-				Format:      p.Format,
-			}
+			props[name] = toGeminiProp(p)
 		}
 		out = append(out, geminiFunction{
 			Name:        t.Name,
@@ -218,6 +213,23 @@ func toolDecls(tools []llm.ToolDecl) []geminiFunction {
 		})
 	}
 	return out
+}
+
+// toGeminiProp converts an llm.ToolProperty to Gemini's schema shape,
+// recursively carrying the array element schema (Items) so that "array"
+// parameters are accepted (Gemini rejects an array that omits "items").
+func toGeminiProp(p llm.ToolProperty) geminiFunctionProperty {
+	gp := geminiFunctionProperty{
+		Type:        p.Type,
+		Description: p.Description,
+		Enum:        p.Enum,
+		Format:      p.Format,
+	}
+	if p.Items != nil {
+		items := toGeminiProp(*p.Items)
+		gp.Items = &items
+	}
+	return gp
 }
 
 func chatResponse(resp geminiResponse) llm.ChatResponse {

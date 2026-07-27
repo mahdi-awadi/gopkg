@@ -59,6 +59,9 @@ type ToolProperty struct {
 	Description string
 	Enum        []string
 	Format      string
+	// Items describes the element schema when Type == "array". Required by
+	// providers such as Gemini, which reject an array parameter that omits it.
+	Items *ToolProperty
 }
 
 // TokenUsage is best-effort token accounting.

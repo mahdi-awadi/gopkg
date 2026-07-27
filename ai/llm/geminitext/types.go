@@ -54,10 +54,11 @@ type geminiFunctionParams struct {
 }
 
 type geminiFunctionProperty struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description"`
-	Enum        []string `json:"enum,omitempty"`
-	Format      string   `json:"format,omitempty"`
+	Type        string                  `json:"type"`
+	Description string                  `json:"description"`
+	Enum        []string                `json:"enum,omitempty"`
+	Format      string                  `json:"format,omitempty"`
+	Items       *geminiFunctionProperty `json:"items,omitempty"`
 }
 
 type generationConfig struct {
