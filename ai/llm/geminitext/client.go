@@ -182,8 +182,11 @@ func turnContent(turn llm.ChatTurn) geminiContent {
 		role = "model"
 	}
 	if turn.Role == "tool" {
+		// Function responses are carried on a "user" role turn. Newer Gemini
+		// models (3.x) reject role "function" (valid roles: user/model); "user"
+		// with a functionResponse part is accepted across model generations.
 		return geminiContent{
-			Role: "function",
+			Role: "user",
 			Parts: []geminiPart{{
 				FunctionResponse: &geminiFunctionResponse{
 					Name:     turn.ToolName,
