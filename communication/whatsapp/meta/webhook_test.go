@@ -1,6 +1,9 @@
 package meta
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestParseWebhook_Message(t *testing.T) {
 	raw := []byte(`{
@@ -44,6 +47,46 @@ func TestParseWebhook_CallEvent(t *testing.T) {
 	c := ev.Calls[0]
 	if c.ID != "wacid.7" || c.Event != "connect" || c.Session == nil || c.Session.SDP != "X" {
 		t.Fatalf("bad call event: %+v (session=%+v)", c, c.Session)
+	}
+}
+
+func TestParseWebhook_OrderRaw(t *testing.T) {
+	raw := []byte(`{
+	  "object":"whatsapp_business_account",
+	  "entry":[{"changes":[{"field":"messages","value":{
+	    "metadata":{"phone_number_id":"PNID1"},
+	    "messages":[{"id":"wamid.9","from":"15551234","timestamp":"171","type":"order","order":{
+	      "catalog_id":"CAT1",
+	      "product_items":[{"product_retailer_id":"SKU-1","quantity":2,"item_price":9.5,"currency":"USD"}]
+	    }}]
+	  }}]}]
+	}`)
+	ev, err := ParseWebhook(raw)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(ev.Messages) != 1 {
+		t.Fatalf("want 1 message, got %d", len(ev.Messages))
+	}
+	m := ev.Messages[0]
+	if m.Type != "order" {
+		t.Fatalf("Type=%q, want order", m.Type)
+	}
+	if len(m.Raw) == 0 {
+		t.Fatal("Raw was not populated for the order message")
+	}
+	var parsed struct {
+		Order struct {
+			ProductItems []struct {
+				ProductRetailerID string `json:"product_retailer_id"`
+			} `json:"product_items"`
+		} `json:"order"`
+	}
+	if err := json.Unmarshal(m.Raw, &parsed); err != nil {
+		t.Fatalf("unmarshal Raw: %v", err)
+	}
+	if len(parsed.Order.ProductItems) != 1 || parsed.Order.ProductItems[0].ProductRetailerID != "SKU-1" {
+		t.Fatalf("product_retailer_id not recoverable from Raw: %+v", parsed)
 	}
 }
 

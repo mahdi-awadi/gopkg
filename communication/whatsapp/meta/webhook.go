@@ -61,15 +61,7 @@ type rawWebhook struct {
 				Metadata struct {
 					PhoneNumberID string `json:"phone_number_id"`
 				} `json:"metadata"`
-				Messages []struct {
-					ID        string `json:"id"`
-					From      string `json:"from"`
-					Timestamp string `json:"timestamp"`
-					Type      string `json:"type"`
-					Text      struct {
-						Body string `json:"body"`
-					} `json:"text"`
-				} `json:"messages"`
+				Messages []json.RawMessage `json:"messages"`
 				Calls    []json.RawMessage `json:"calls"`
 				Statuses []json.RawMessage `json:"statuses"`
 			} `json:"value"`
@@ -87,7 +79,19 @@ func ParseWebhook(raw []byte) (*WebhookEvent, error) {
 	for _, entry := range rw.Entry {
 		for _, ch := range entry.Changes {
 			pnID := ch.Value.Metadata.PhoneNumberID
-			for _, m := range ch.Value.Messages {
+			for _, rawMsg := range ch.Value.Messages {
+				var m struct {
+					ID        string `json:"id"`
+					From      string `json:"from"`
+					Timestamp string `json:"timestamp"`
+					Type      string `json:"type"`
+					Text      struct {
+						Body string `json:"body"`
+					} `json:"text"`
+				}
+				if err := json.Unmarshal(rawMsg, &m); err != nil {
+					return nil, fmt.Errorf("meta: parse message: %w", err)
+				}
 				ev.Messages = append(ev.Messages, InboundMessage{
 					ID:          m.ID,
 					From:        m.From,
@@ -95,6 +99,7 @@ func ParseWebhook(raw []byte) (*WebhookEvent, error) {
 					Type:        m.Type,
 					Text:        m.Text.Body,
 					PhoneNumber: pnID,
+					Raw:         rawMsg,
 				})
 			}
 			for _, c := range ch.Value.Calls {
