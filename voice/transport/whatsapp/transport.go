@@ -184,7 +184,7 @@ func (t *Transport) Send(_ context.Context, f pipeline.Frame) error {
 
 	// Encode in fixed 480-sample (20 ms @24k) chunks.
 	for len(t.sendBuf) >= outFrameSamples {
-		frame := t.sendBuf[:outFrameSamples]
+		frame := append([]int16(nil), t.sendBuf[:outFrameSamples]...)
 		t.sendBuf = t.sendBuf[outFrameSamples:]
 
 		n, encErr := t.enc.Encode(frame, opusBuf)
