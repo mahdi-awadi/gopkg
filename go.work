@@ -1,19 +1,10 @@
-go 1.26
+go 1.26.4
 
 use (
-	// ./communication/telegram/bot — temporarily excluded from the workspace.
-	// The module still has a `replace eticket-v3/services/common => /home/...`
-	// directive (path doesn't exist on CI), and including it in the workspace
-	// causes Go to apply that replace to every other module's build graph,
-	// breaking the bus/bus/nats CI jobs. The bot is consumed by eticket-v3 via
-	// its own go.mod replace and does not need to be in this workspace to
-	// build there. Removing the eticket-v3 coupling is tracked in
-	// eticket-v3/docs/superpowers/specs/2026-05-16-gopkg-telegram-bot-extraction-design.md.
-	./communication/router
-	./ai/llm/geminitext
-	./ai/orchestrator
 	./ai/conversation
 	./ai/llm
+	./ai/llm/geminitext
+	./ai/orchestrator
 	./audio/codec
 	./bus
 	./bus/nats
@@ -25,6 +16,15 @@ use (
 	./communication/provider
 	./communication/push/expo
 	./communication/push/fcm
+	// ./communication/telegram/bot — temporarily excluded from the workspace.
+	// The module still has a `replace eticket-v3/services/common => /home/...`
+	// directive (path doesn't exist on CI), and including it in the workspace
+	// causes Go to apply that replace to every other module's build graph,
+	// breaking the bus/bus/nats CI jobs. The bot is consumed by eticket-v3 via
+	// its own go.mod replace and does not need to be in this workspace to
+	// build there. Removing the eticket-v3 coupling is tracked in
+	// eticket-v3/docs/superpowers/specs/2026-05-16-gopkg-telegram-bot-extraction-design.md.
+	./communication/router
 	./communication/sms/twilio
 	./communication/telegram
 	./communication/voice/twilio
@@ -63,5 +63,6 @@ use (
 	./voice/pipeline
 	./voice/toolexec
 	./voice/transport/twilio
+	./voice/transport/whatsapp
 	./workerpool
 )
