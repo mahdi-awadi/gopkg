@@ -20,6 +20,7 @@ use (
 	./cache/lru
 	./circuitbreaker
 	./clock
+	./communication/email/cloudflare
 	./communication/email/sendgrid
 	./communication/email/ses
 	./communication/provider
