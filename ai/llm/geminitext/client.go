@@ -170,32 +170,39 @@ func (c *Client) ChatWithConfig(ctx context.Context, req llm.ChatRequest, temper
 func chatContents(req llm.ChatRequest) []geminiContent {
 	out := make([]geminiContent, 0, len(req.History)+1)
 	for _, turn := range req.History {
-		out = append(out, turnContent(turn))
+		out = append(out, turnContents(turn)...)
 	}
-	out = append(out, geminiContent{Role: "user", Parts: []geminiPart{{Text: req.UserText}}})
+	// Only append a trailing user turn when there is new user text. Tool-loop
+	// continuation hops pass UserText="" — the conversation already ends on a
+	// functionResponse, and an empty user part would be rejected by Gemini.
+	if req.UserText != "" {
+		out = append(out, geminiContent{Role: "user", Parts: []geminiPart{{Text: req.UserText}}})
+	}
 	return out
 }
 
-func turnContent(turn llm.ChatTurn) geminiContent {
-	role := "user"
-	if turn.Role == "assistant" {
-		role = "model"
-	}
+// turnContents renders one ChatTurn. A "tool" turn becomes a model turn carrying
+// the functionCall followed by a user turn carrying the functionResponse — the
+// pairing Gemini needs to bind a result to its call across hops.
+func turnContents(turn llm.ChatTurn) []geminiContent {
 	if turn.Role == "tool" {
-		// Function responses are carried on a "user" role turn. Newer Gemini
-		// models (3.x) reject role "function" (valid roles: user/model); "user"
-		// with a functionResponse part is accepted across model generations.
-		return geminiContent{
-			Role: "user",
-			Parts: []geminiPart{{
+		return []geminiContent{
+			{Role: "model", Parts: []geminiPart{{
+				FunctionCall: &geminiFunctionCall{Name: turn.ToolName, Args: turn.ToolArgs},
+			}}},
+			{Role: "user", Parts: []geminiPart{{
 				FunctionResponse: &geminiFunctionResponse{
 					Name:     turn.ToolName,
 					Response: map[string]any{"result": turn.ToolResult},
 				},
-			}},
+			}}},
 		}
 	}
-	return geminiContent{Role: role, Parts: []geminiPart{{Text: turn.Text}}}
+	role := "user"
+	if turn.Role == "assistant" {
+		role = "model"
+	}
+	return []geminiContent{{Role: role, Parts: []geminiPart{{Text: turn.Text}}}}
 }
 
 func toolDecls(tools []llm.ToolDecl) []geminiFunction {
