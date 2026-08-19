@@ -1,0 +1,27 @@
+v=0
+o=- 1787129101748 2 IN IP4 127.0.0.1
+s=-
+t=0 0
+a=group:BUNDLE audio
+a=msid-semantic: WMS 580b2d10-f747-4054-8814-1462a0c3142b
+a=ice-lite
+m=audio 3480 UDP/TLS/RTP/SAVPF 111 126
+c=IN IP4 157.240.234.52
+a=rtcp:9 IN IP4 0.0.0.0
+a=candidate:3492624893 1 udp 2122260223 157.240.234.52 3480 typ host generation 0 network-cost 50
+a=candidate:1495344733 1 udp 2122262783 2a03:2880:f228:1c8:face:b00c:0:699c 3480 typ host generation 0 network-cost 50
+a=ice-ufrag:BgJ+EQnQvN/FtvNk
+a=ice-pwd:sbcyC8JIW2Hz9iVFGspVDw==
+a=fingerprint:sha-256 92:29:FC:79:BC:86:C9:0C:48:2E:9D:64:AE:B0:61:A7:69:55:93:C4:E8:65:C4:A4:F5:F2:8B:0D:4F:DC:84:1A
+a=setup:actpass
+a=mid:audio
+a=sendrecv
+a=msid:580b2d10-f747-4054-8814-1462a0c3142b WhatsAppTrack1
+a=rtcp-mux
+a=rtpmap:111 opus/48000/2
+a=rtcp-fb:111 transport-cc
+a=fmtp:111 maxaveragebitrate=20000;maxplaybackrate=16000;minptime=20;sprop-maxcapturerate=16000;useinbandfec=1
+a=rtpmap:126 telephone-event/8000
+a=maxptime:20
+a=ptime:20
+a=ssrc:2983076023 cname:WhatsAppAudioStream1

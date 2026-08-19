@@ -1,8 +1,9 @@
 module github.com/mahdi-awadi/gopkg/voice/transport/whatsapp
 
-go 1.26.4
+go 1.24.0
 
 require (
+	github.com/hraban/opus v0.0.0-20260708213942-bde8e4304501
 	github.com/mahdi-awadi/gopkg/voice/pipeline v0.1.0
 	github.com/pion/ice/v4 v4.4.0
 	github.com/pion/rtp v1.10.5

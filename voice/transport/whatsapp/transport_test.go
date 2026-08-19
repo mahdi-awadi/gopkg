@@ -1,13 +1,13 @@
 package whatsapptransport
 
 import (
-	"bytes"
 	"context"
+	"math"
 	"testing"
 	"time"
 
+	"github.com/hraban/opus"
 	"github.com/mahdi-awadi/gopkg/voice/pipeline"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -24,32 +24,100 @@ func completeHandshake(t *testing.T, offerer *webrtc.PeerConnection, answerSDP s
 	}
 }
 
-// TestRTPToFrame_PayloadMapping proves that rtpToFrame copies RTP payload bytes
-// into pipeline.Frame.Data unchanged. This is the sole structural assertion
-// that the Receive loop emits the right bytes; it passes without any ICE or
-// DTLS connectivity.
-func TestRTPToFrame_PayloadMapping(t *testing.T) {
-	payload := []byte{0xD5, 0xA5, 0x00, 0xFF, 0x7F}
-	pkt := &rtp.Packet{
-		Header:  rtp.Header{PayloadType: 0, SequenceNumber: 1, Timestamp: 160, SSRC: 0xdeadbeef},
-		Payload: payload,
+// newTransport is a test helper that builds a Peer + Transport from the given
+// offer SDP using the test (loopback-only) ICE config.
+func newTransport(t *testing.T, offerSDP string) *Transport {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	peer, err := NewPeer(ctx, offerSDP, testConfig())
+	if err != nil {
+		t.Fatalf("NewPeer: %v", err)
 	}
 
-	before := time.Now()
-	frame := rtpToFrame(pkt)
-	after := time.Now()
-
-	if !bytes.Equal(frame.Data, payload) {
-		t.Errorf("rtpToFrame Data = %v, want %v", frame.Data, payload)
+	tp, err := New(peer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-	if frame.Timestamp.Before(before) || frame.Timestamp.After(after) {
-		t.Errorf("rtpToFrame Timestamp %v not in [%v, %v]", frame.Timestamp, before, after)
-	}
-	// Mutating the original payload must not affect an already-emitted frame.
-	// (Frame.Data is the same slice, same as the real Receive loop — document
-	// this is intentional; pion does not reuse the buffer across ReadRTP calls.)
+	return tp
 }
 
+// TestOpusRoundtrip encodes a PCM ramp to Opus at 24k (outSampleRate) then
+// decodes at 16k (inSampleRate) and verifies:
+//  1. The decoded output has the expected sample count (≥ inSampleRate*20/1000 = 320 samples)
+//  2. The energy is non-zero (Opus is lossy — we assert approximate fidelity,
+//     not bit-exact equality).
+//
+// This test proves CGO libopus wiring end to end without any ICE/WebRTC.
+func TestOpusRoundtrip(t *testing.T) {
+	enc, err := opus.NewEncoder(outSampleRate, 1, opus.AppVoIP)
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	dec, err := opus.NewDecoder(inSampleRate, 1)
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+
+	// Build a 20 ms ramp signal at 24k: 480 samples from -16384 to +16383.
+	pcm := make([]int16, outFrameSamples) // 480
+	for i := range pcm {
+		pcm[i] = int16(-16384 + i*(32767/outFrameSamples))
+	}
+
+	// Encode.
+	opusBuf := make([]byte, maxOpusBuf)
+	n, err := enc.Encode(pcm, opusBuf)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("Encode returned 0 bytes")
+	}
+
+	// Decode at 16k — libopus resamples. 20 ms @ 16k = 320 samples.
+	outPCM := make([]int16, maxDecodeSamples)
+	m, err := dec.Decode(opusBuf[:n], outPCM)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	const wantSamples = inSampleRate * outFrameMs / 1000 // 320
+	if m < wantSamples {
+		t.Errorf("Decode returned %d samples, want >= %d", m, wantSamples)
+	}
+
+	// Assert non-silent (sum of squares > 0).
+	var energy float64
+	for _, s := range outPCM[:m] {
+		energy += math.Pow(float64(s), 2)
+	}
+	if energy == 0 {
+		t.Error("decoded output is silent — Opus encode/decode produced all zeros")
+	}
+}
+
+// TestTransport_Formats checks InboundFormat and OutboundFormat values.
+func TestTransport_Formats(t *testing.T) {
+	offerer, _, offerSDP := newTestOffererWithTrack(t)
+	defer offerer.Close()
+
+	tp := newTransport(t, offerSDP)
+	defer tp.Close()
+
+	in := tp.InboundFormat()
+	out := tp.OutboundFormat()
+
+	if in.Encoding != pipeline.EncodingPCM16LE || in.SampleRate != 16000 || in.Channels != 1 {
+		t.Errorf("InboundFormat = %+v, want pcm16le@16k mono", in)
+	}
+	if out.Encoding != pipeline.EncodingPCM16LE || out.SampleRate != 24000 || out.Channels != 1 {
+		t.Errorf("OutboundFormat = %+v, want pcm16le@24k mono", out)
+	}
+}
+
+// TestTransport_SendReturnsNil sends one 24k PCM frame via Send and asserts nil error.
 func TestTransport_SendReturnsNil(t *testing.T) {
 	offerer, _, offerSDP := newTestOffererWithTrack(t)
 	defer offerer.Close()
@@ -62,28 +130,30 @@ func TestTransport_SendReturnsNil(t *testing.T) {
 		t.Fatalf("NewPeer: %v", err)
 	}
 	completeHandshake(t, offerer, peer.AnswerSDP)
-	tp := New(peer)
+
+	tp, err := New(peer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	defer tp.Close()
 
-	// Send should return nil — the sample is accepted by the local track.
-	frame := pipeline.Frame{Data: []byte{0x00, 0xFF, 0xAA}, Timestamp: time.Now()}
+	// 480 samples @ 24k = exactly one 20ms Opus frame → one WriteSample call.
+	pcm := make([]int16, outFrameSamples)
+	for i := range pcm {
+		pcm[i] = int16(i * 64) // non-silent
+	}
+	frame := pipeline.Frame{Data: int16LEToBytes(pcm), Timestamp: time.Now()}
 	if err := tp.Send(context.Background(), frame); err != nil {
 		t.Errorf("Send returned error: %v", err)
 	}
 }
 
+// TestTransport_ClearAndMarkReturnNil checks no-op methods.
 func TestTransport_ClearAndMarkReturnNil(t *testing.T) {
 	offerer, _, offerSDP := newTestOffererWithTrack(t)
 	defer offerer.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	peer, err := NewPeer(ctx, offerSDP, testConfig())
-	if err != nil {
-		t.Fatalf("NewPeer: %v", err)
-	}
-	tp := New(peer)
+	tp := newTransport(t, offerSDP)
 	defer tp.Close()
 
 	c := context.Background()
@@ -95,18 +165,12 @@ func TestTransport_ClearAndMarkReturnNil(t *testing.T) {
 	}
 }
 
+// TestTransport_CloseIsIdempotent calls Close twice and asserts both return nil.
 func TestTransport_CloseIsIdempotent(t *testing.T) {
 	offerer, _, offerSDP := newTestOffererWithTrack(t)
 	defer offerer.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	peer, err := NewPeer(ctx, offerSDP, testConfig())
-	if err != nil {
-		t.Fatalf("NewPeer: %v", err)
-	}
-	tp := New(peer)
+	tp := newTransport(t, offerSDP)
 
 	if err := tp.Close(); err != nil {
 		t.Errorf("first Close returned error: %v", err)
@@ -116,18 +180,13 @@ func TestTransport_CloseIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestTransport_ReceiveClosesAfterClose verifies that Close() unblocks the
+// Receive goroutine waiting for a remote track and both channels close promptly.
 func TestTransport_ReceiveClosesAfterClose(t *testing.T) {
 	offerer, _, offerSDP := newTestOffererWithTrack(t)
 	defer offerer.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	peer, err := NewPeer(ctx, offerSDP, testConfig())
-	if err != nil {
-		t.Fatalf("NewPeer: %v", err)
-	}
-	tp := New(peer)
+	tp := newTransport(t, offerSDP)
 
 	frames, errs := tp.Receive(context.Background())
 
@@ -155,10 +214,9 @@ func TestTransport_ReceiveClosesAfterClose(t *testing.T) {
 	}
 }
 
-// TestTransport_MediaLoopback sends PCMU samples from the offerer's track and
-// asserts that at least one pipeline.Frame arrives on the transport's Receive
-// channel. This test requires functional localhost ICE connectivity; it is
-// skipped (not failed) when ICE cannot complete in the current environment.
+// TestTransport_MediaLoopback sends Opus-encoded audio from the offerer track,
+// waits for a decoded pcm16le frame on the Receive channel. Skipped (not
+// failed) when ICE cannot complete in the current environment.
 func TestTransport_MediaLoopback(t *testing.T) {
 	offerer, offererTrack, offerSDP := newTestOffererWithTrack(t)
 	defer offerer.Close()
@@ -174,17 +232,30 @@ func TestTransport_MediaLoopback(t *testing.T) {
 
 	completeHandshake(t, offerer, peer.AnswerSDP)
 
-	tp := New(peer)
+	tp, err := New(peer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	defer tp.Close()
 
 	frames, errs := tp.Receive(ctx)
 
-	// Send PCMU samples from the offerer side every 20ms.
-	// 160 bytes = 20ms of 8kHz µ-law audio.
-	pcmuSample := make([]byte, 160)
-	for i := range pcmuSample {
-		pcmuSample[i] = 0xFF
+	// Encode a 20ms Opus frame to send from the offerer.
+	enc, err := opus.NewEncoder(48000, 2, opus.AppVoIP)
+	if err != nil {
+		t.Fatalf("loopback encoder: %v", err)
 	}
+	// 20ms @ 48k stereo = 960 samples per channel × 2 channels = 1920 int16s.
+	stereoSamples := make([]int16, 960*2)
+	for i := range stereoSamples {
+		stereoSamples[i] = 1000 // non-silent constant
+	}
+	opusBuf := make([]byte, maxOpusBuf)
+	n, err := enc.Encode(stereoSamples, opusBuf)
+	if err != nil {
+		t.Fatalf("loopback encode: %v", err)
+	}
+	opusFrame := opusBuf[:n]
 
 	go func() {
 		ticker := time.NewTicker(20 * time.Millisecond)
@@ -195,21 +266,21 @@ func TestTransport_MediaLoopback(t *testing.T) {
 				return
 			case <-ticker.C:
 				_ = offererTrack.WriteSample(media.Sample{
-					Data:     pcmuSample,
+					Data:     opusFrame,
 					Duration: 20 * time.Millisecond,
 				})
 			}
 		}
 	}()
 
-	// Expect at least one frame to arrive, or skip if ICE cannot connect.
+	// Expect at least one decoded PCM frame, or skip if ICE cannot connect.
 	select {
 	case f, ok := <-frames:
 		if !ok {
 			t.Skip("media loopback: receive channel closed (ICE may not be available in this env)")
 		}
 		if len(f.Data) == 0 {
-			t.Error("received frame has empty Data")
+			t.Error("received decoded frame has empty Data")
 		}
 	case <-errs:
 		t.Skip("media loopback: transport error (ICE may not be available in this env)")

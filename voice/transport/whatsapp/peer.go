@@ -21,7 +21,7 @@ type Config struct {
 	settingEngine *webrtc.SettingEngine
 }
 
-// Peer wraps a negotiated pion PeerConnection ready to exchange PCMU audio.
+// Peer wraps a negotiated pion PeerConnection ready to exchange Opus audio.
 // Callers obtain one via NewPeer, pass it to New to get a pipeline.Transport,
 // then hand peer.AnswerSDP back to the WhatsApp Cloud API.
 type Peer struct {
@@ -38,7 +38,7 @@ type Peer struct {
 }
 
 // NewPeer builds a PeerConnection from the caller's SDP offer, negotiates
-// PCMU only, and gathers ICE candidates before returning. The returned
+// Opus 48000/2 only, and gathers ICE candidates before returning. The returned
 // Peer.AnswerSDP is the complete answer to send back to the WhatsApp caller.
 func NewPeer(ctx context.Context, offerSDP string, cfg Config) (*Peer, error) {
 	iceServers := cfg.ICEServers
@@ -46,15 +46,16 @@ func NewPeer(ctx context.Context, offerSDP string, cfg Config) (*Peer, error) {
 		iceServers = []webrtc.ICEServer{{URLs: []string{defaultSTUN}}}
 	}
 
-	// Register PCMU only — no other codecs.
+	// Register Opus only — matches the real WhatsApp SDP offer (a=rtpmap:111 opus/48000/2).
 	me := &webrtc.MediaEngine{}
 	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypePCMU,
-			ClockRate: 8000,
-			Channels:  1,
+			MimeType:    webrtc.MimeTypeOpus,
+			ClockRate:   48000,
+			Channels:    2,
+			SDPFmtpLine: "minptime=10;useinbandfec=1",
 		},
-		PayloadType: 0,
+		PayloadType: 111,
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return nil, err
 	}
@@ -70,9 +71,10 @@ func NewPeer(ctx context.Context, offerSDP string, cfg Config) (*Peer, error) {
 		return nil, err
 	}
 
-	// Local sendonly track for outbound AI audio.
+	// Local sendonly track for outbound AI audio (Opus 48k stereo header, pion
+	// timestamps on the 48k clock via WriteSample Duration).
 	localTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
 		"audio", "adminli-voice",
 	)
 	if err != nil {

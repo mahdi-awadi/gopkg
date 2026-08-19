@@ -11,13 +11,25 @@
 //
 // # Codec
 //
-// Only PCMU (G.711 µ-law, 8000 Hz, mono, RTP payload type 0) is negotiated.
-// PCMU RTP payload bytes are raw µ-law samples — no transcoding is needed inside
-// this transport. Both InboundFormat and OutboundFormat report:
+// Only Opus (48000 Hz, 2-channel, RTP payload type 111) is negotiated — the
+// codec advertised by the real WhatsApp Cloud API SDP offer. Transcoding is
+// performed by CGO libopus (github.com/hraban/opus; requires libopus ≥ 1.1):
 //
-//	pipeline.AudioFormat{Encoding: pipeline.EncodingMulaw, SampleRate: 8000, Channels: 1}
+//   - Inbound (caller → Gemini): each Opus frame is decoded to PCM16LE @ 16 kHz
+//     mono (libopus resamples internally). InboundFormat reports:
+//     pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 16000, Channels: 1}
 //
-// This matches the pipeline's built-in codec bridge.
+//   - Outbound (Gemini → caller): PCM16LE @ 24 kHz mono is buffered and encoded
+//     in fixed 20 ms / 480-sample Opus frames. OutboundFormat reports:
+//     pipeline.AudioFormat{Encoding: pipeline.EncodingPCM16LE, SampleRate: 24000, Channels: 1}
+//
+// # Build requirement
+//
+// This package uses CGO and requires libopus to be present:
+//
+//	apt-get install libopus-dev   # Debian/Ubuntu
+//
+// Build with CGO_ENABLED=1 (the default when a C toolchain is available).
 //
 // # Concurrency
 //

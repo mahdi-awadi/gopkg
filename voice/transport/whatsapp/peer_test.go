@@ -2,6 +2,7 @@ package whatsapptransport
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 // newTestOffererWithTrack creates a pion PeerConnection in the role of the
 // remote caller (offerer), configured for fast ICE gathering (host candidates
 // only, no STUN, no mDNS) so tests do not depend on external network access.
+// The offerer negotiates Opus 48000/2, matching the real WhatsApp Cloud API.
 func newTestOffererWithTrack(t *testing.T) (*webrtc.PeerConnection, *webrtc.TrackLocalStaticSample, string) {
 	t.Helper()
 
@@ -24,11 +26,12 @@ func newTestOffererWithTrack(t *testing.T) (*webrtc.PeerConnection, *webrtc.Trac
 	me := &webrtc.MediaEngine{}
 	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypePCMU,
-			ClockRate: 8000,
-			Channels:  1,
+			MimeType:    webrtc.MimeTypeOpus,
+			ClockRate:   48000,
+			Channels:    2,
+			SDPFmtpLine: "minptime=10;useinbandfec=1",
 		},
-		PayloadType: 0,
+		PayloadType: 111,
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		t.Fatalf("offerer RegisterCodec: %v", err)
 	}
@@ -40,7 +43,7 @@ func newTestOffererWithTrack(t *testing.T) (*webrtc.PeerConnection, *webrtc.Trac
 	}
 
 	track, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
 		"audio", "offerer-voice",
 	)
 	if err != nil {
@@ -64,6 +67,8 @@ func newTestOffererWithTrack(t *testing.T) (*webrtc.PeerConnection, *webrtc.Trac
 	return pc, track, pc.LocalDescription().SDP
 }
 
+// TestNewPeer_BuildsAnswerSDP verifies that NewPeer accepts a synthetic Opus
+// offer and returns a non-empty answer containing m=audio.
 func TestNewPeer_BuildsAnswerSDP(t *testing.T) {
 	offerer, _, offerSDP := newTestOffererWithTrack(t)
 	defer offerer.Close()
@@ -85,6 +90,38 @@ func TestNewPeer_BuildsAnswerSDP(t *testing.T) {
 	}
 }
 
+// TestNewPeer_RealWhatsAppOffer feeds the real WhatsApp Cloud API SDP offer
+// (testdata/offer-whatsapp-opus.sdp) to NewPeer and asserts that the answer
+// negotiates Opus and not PCMU.
+func TestNewPeer_RealWhatsAppOffer(t *testing.T) {
+	sdpBytes, err := os.ReadFile("testdata/offer-whatsapp-opus.sdp")
+	if err != nil {
+		t.Fatalf("reading testdata/offer-whatsapp-opus.sdp: %v", err)
+	}
+	offerSDP := string(sdpBytes)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	peer, err := NewPeer(ctx, offerSDP, testConfig())
+	if err != nil {
+		t.Fatalf("NewPeer with real WhatsApp offer: %v", err)
+	}
+	defer peer.PC.Close()
+
+	if !strings.Contains(peer.AnswerSDP, "m=audio") {
+		t.Errorf("AnswerSDP missing m=audio: %q", peer.AnswerSDP)
+	}
+	if !strings.Contains(strings.ToLower(peer.AnswerSDP), "opus/48000") {
+		t.Errorf("AnswerSDP does not contain opus/48000: %q", peer.AnswerSDP)
+	}
+	if strings.Contains(strings.ToUpper(peer.AnswerSDP), "PCMU") {
+		t.Errorf("AnswerSDP contains PCMU — codec mismatch: %q", peer.AnswerSDP)
+	}
+}
+
+// TestNewPeer_Formats verifies InboundFormat and OutboundFormat after a
+// successful negotiation using the synthetic Opus offerer.
 func TestNewPeer_Formats(t *testing.T) {
 	offerer, _, offerSDP := newTestOffererWithTrack(t)
 	defer offerer.Close()
@@ -98,16 +135,19 @@ func TestNewPeer_Formats(t *testing.T) {
 	}
 	defer peer.PC.Close()
 
-	tp := New(peer)
+	tp, err := New(peer)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	defer tp.Close()
 
 	in := tp.InboundFormat()
 	out := tp.OutboundFormat()
 
-	if in.Encoding != pipeline.EncodingMulaw || in.SampleRate != 8000 || in.Channels != 1 {
-		t.Errorf("InboundFormat = %+v, want mulaw@8k mono", in)
+	if in.Encoding != pipeline.EncodingPCM16LE || in.SampleRate != 16000 || in.Channels != 1 {
+		t.Errorf("InboundFormat = %+v, want pcm16le@16k mono", in)
 	}
-	if out.Encoding != pipeline.EncodingMulaw || out.SampleRate != 8000 || out.Channels != 1 {
-		t.Errorf("OutboundFormat = %+v, want mulaw@8k mono", out)
+	if out.Encoding != pipeline.EncodingPCM16LE || out.SampleRate != 24000 || out.Channels != 1 {
+		t.Errorf("OutboundFormat = %+v, want pcm16le@24k mono", out)
 	}
 }
