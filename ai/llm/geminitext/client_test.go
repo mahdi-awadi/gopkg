@@ -83,3 +83,49 @@ func TestChatContents_ToolTurnEmitsCallThenResponse(t *testing.T) {
 		t.Fatalf("content[2] must be a user functionResponse for search_products, got %+v", c[2])
 	}
 }
+
+func TestChatContents_ParallelToolCalls_Grouped(t *testing.T) {
+	req := llm.ChatRequest{
+		History: []llm.ChatTurn{
+			{Role: "user", Text: "x"},
+			{Role: "tool", ToolName: "toolA", ToolArgs: map[string]any{"a": 1}, ToolResult: map[string]any{"ra": 1}},
+			{Role: "tool", ToolName: "toolB", ToolArgs: map[string]any{"b": 2}, ToolResult: map[string]any{"rb": 2}},
+		},
+		UserText: "",
+	}
+	c := chatContents(req)
+	// Expect: [0] user "x"; [1] model with 2 FunctionCall parts; [2] user with 2 FunctionResponse parts.
+	if len(c) != 3 {
+		t.Fatalf("want 3 contents, got %d: %+v", len(c), c)
+	}
+	// [0] user text
+	if c[0].Role != "user" || c[0].Parts[0].Text != "x" {
+		t.Fatalf("content[0] must be user 'x', got %+v", c[0])
+	}
+	// [1] model with TWO FunctionCall parts
+	if c[1].Role != "model" {
+		t.Fatalf("content[1] must be role model, got %q", c[1].Role)
+	}
+	if len(c[1].Parts) != 2 {
+		t.Fatalf("content[1] must have 2 parts (one per tool call), got %d: %+v", len(c[1].Parts), c[1].Parts)
+	}
+	if c[1].Parts[0].FunctionCall == nil || c[1].Parts[0].FunctionCall.Name != "toolA" {
+		t.Fatalf("content[1].Parts[0] must be FunctionCall toolA, got %+v", c[1].Parts[0])
+	}
+	if c[1].Parts[1].FunctionCall == nil || c[1].Parts[1].FunctionCall.Name != "toolB" {
+		t.Fatalf("content[1].Parts[1] must be FunctionCall toolB, got %+v", c[1].Parts[1])
+	}
+	// [2] user with TWO FunctionResponse parts
+	if c[2].Role != "user" {
+		t.Fatalf("content[2] must be role user, got %q", c[2].Role)
+	}
+	if len(c[2].Parts) != 2 {
+		t.Fatalf("content[2] must have 2 parts (one per tool response), got %d: %+v", len(c[2].Parts), c[2].Parts)
+	}
+	if c[2].Parts[0].FunctionResponse == nil || c[2].Parts[0].FunctionResponse.Name != "toolA" {
+		t.Fatalf("content[2].Parts[0] must be FunctionResponse toolA, got %+v", c[2].Parts[0])
+	}
+	if c[2].Parts[1].FunctionResponse == nil || c[2].Parts[1].FunctionResponse.Name != "toolB" {
+		t.Fatalf("content[2].Parts[1] must be FunctionResponse toolB, got %+v", c[2].Parts[1])
+	}
+}

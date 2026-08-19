@@ -169,8 +169,42 @@ func (c *Client) ChatWithConfig(ctx context.Context, req llm.ChatRequest, temper
 
 func chatContents(req llm.ChatRequest) []geminiContent {
 	out := make([]geminiContent, 0, len(req.History)+1)
-	for _, turn := range req.History {
-		out = append(out, turnContents(turn)...)
+	h := req.History
+	for i := 0; i < len(h); {
+		if h[i].Role == "tool" {
+			// Greedily consume the maximal run of consecutive tool turns and
+			// emit ONE model content (all functionCall parts) followed by ONE
+			// user content (all functionResponse parts).  Gemini's
+			// parallel-function-calling contract requires this grouped shape;
+			// the interleaved shape (call A, resp A, call B, resp B) is
+			// off-contract and can 400 on stricter model generations.
+			j := i
+			for j < len(h) && h[j].Role == "tool" {
+				j++
+			}
+			run := h[i:j]
+			callParts := make([]geminiPart, 0, len(run))
+			respParts := make([]geminiPart, 0, len(run))
+			for _, t := range run {
+				callParts = append(callParts, geminiPart{
+					FunctionCall: &geminiFunctionCall{Name: t.ToolName, Args: t.ToolArgs},
+				})
+				respParts = append(respParts, geminiPart{
+					FunctionResponse: &geminiFunctionResponse{
+						Name:     t.ToolName,
+						Response: map[string]any{"result": t.ToolResult},
+					},
+				})
+			}
+			out = append(out,
+				geminiContent{Role: "model", Parts: callParts},
+				geminiContent{Role: "user", Parts: respParts},
+			)
+			i = j
+			continue
+		}
+		out = append(out, turnContents(h[i])...)
+		i++
 	}
 	// Only append a trailing user turn when there is new user text. Tool-loop
 	// continuation hops pass UserText="" — the conversation already ends on a
