@@ -73,7 +73,7 @@ func Process(ctx context.Context, registry *llm.Registry, cfg Config, userText s
 			}
 			result, toolErr := cfg.Dispatcher(ctx, call)
 			toolHistory = append(toolHistory, ToolExecution{Call: call, Result: result, Error: toolErr})
-			turns = append(turns, llm.ChatTurn{Role: "tool", ToolName: call.Name, ToolArgs: call.Args, ToolResult: result})
+			turns = append(turns, llm.ChatTurn{Role: "tool", ToolName: call.Name, ToolArgs: call.Args, ToolResult: result, ToolSig: call.ThoughtSignature})
 		}
 		// NO synthetic user turn — the tool turns above already render as
 		// functionCall + functionResponse pairs, which is a complete continuation.

@@ -25,6 +25,10 @@ type geminiPart struct {
 	Text             string                  `json:"text,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+	// ThoughtSignature is a part-level opaque signature Gemini 3.x returns beside
+	// a functionCall (thinking). It MUST be echoed back when the functionCall is
+	// replayed in history, or the API 400s.
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
 type geminiFunctionCall struct {

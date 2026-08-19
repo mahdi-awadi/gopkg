@@ -129,3 +129,23 @@ func TestChatContents_ParallelToolCalls_Grouped(t *testing.T) {
 		t.Fatalf("content[2].Parts[1] must be FunctionResponse toolB, got %+v", c[2].Parts[1])
 	}
 }
+
+// TestChatContents_ReplaysThoughtSignature guards the Gemini 3.x requirement:
+// a replayed functionCall MUST carry the thoughtSignature the model returned, or
+// the API 400s ("Function call is missing a thought_signature").
+func TestChatContents_ReplaysThoughtSignature(t *testing.T) {
+	req := llm.ChatRequest{
+		History: []llm.ChatTurn{
+			{Role: "user", Text: "mug?"},
+			{Role: "tool", ToolName: "search_products", ToolArgs: map[string]any{"query": "mug"},
+				ToolResult: map[string]any{"n": 1}, ToolSig: "SIG123"},
+		},
+	}
+	c := chatContents(req)
+	if len(c) < 2 || len(c[1].Parts) == 0 || c[1].Parts[0].FunctionCall == nil {
+		t.Fatalf("expected a model functionCall content at index 1, got %+v", c)
+	}
+	if got := c[1].Parts[0].ThoughtSignature; got != "SIG123" {
+		t.Fatalf("thoughtSignature not replayed on functionCall: got %q want SIG123", got)
+	}
+}

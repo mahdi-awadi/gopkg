@@ -187,7 +187,8 @@ func chatContents(req llm.ChatRequest) []geminiContent {
 			respParts := make([]geminiPart, 0, len(run))
 			for _, t := range run {
 				callParts = append(callParts, geminiPart{
-					FunctionCall: &geminiFunctionCall{Name: t.ToolName, Args: t.ToolArgs},
+					FunctionCall:     &geminiFunctionCall{Name: t.ToolName, Args: t.ToolArgs},
+					ThoughtSignature: t.ToolSig,
 				})
 				respParts = append(respParts, geminiPart{
 					FunctionResponse: &geminiFunctionResponse{
@@ -222,7 +223,8 @@ func turnContents(turn llm.ChatTurn) []geminiContent {
 	if turn.Role == "tool" {
 		return []geminiContent{
 			{Role: "model", Parts: []geminiPart{{
-				FunctionCall: &geminiFunctionCall{Name: turn.ToolName, Args: turn.ToolArgs},
+				FunctionCall:     &geminiFunctionCall{Name: turn.ToolName, Args: turn.ToolArgs},
+				ThoughtSignature: turn.ToolSig,
 			}}},
 			{Role: "user", Parts: []geminiPart{{
 				FunctionResponse: &geminiFunctionResponse{
@@ -295,9 +297,10 @@ func chatResponse(resp geminiResponse) llm.ChatResponse {
 		}
 		if part.FunctionCall != nil {
 			out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
-				ID:   part.FunctionCall.Name,
-				Name: part.FunctionCall.Name,
-				Args: part.FunctionCall.Args,
+				ID:               part.FunctionCall.Name,
+				Name:             part.FunctionCall.Name,
+				Args:             part.FunctionCall.Args,
+				ThoughtSignature: part.ThoughtSignature,
 			})
 		}
 	}
