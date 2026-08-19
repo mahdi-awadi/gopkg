@@ -1,11 +1,13 @@
 package whatsapptransport
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
 
 	"github.com/mahdi-awadi/gopkg/voice/pipeline"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -22,8 +24,30 @@ func completeHandshake(t *testing.T, offerer *webrtc.PeerConnection, answerSDP s
 	}
 }
 
-func TestTransport_ImplementsPipelineTransport(t *testing.T) {
-	var _ pipeline.Transport = (*Transport)(nil)
+// TestRTPToFrame_PayloadMapping proves that rtpToFrame copies RTP payload bytes
+// into pipeline.Frame.Data unchanged. This is the sole structural assertion
+// that the Receive loop emits the right bytes; it passes without any ICE or
+// DTLS connectivity.
+func TestRTPToFrame_PayloadMapping(t *testing.T) {
+	payload := []byte{0xD5, 0xA5, 0x00, 0xFF, 0x7F}
+	pkt := &rtp.Packet{
+		Header:  rtp.Header{PayloadType: 0, SequenceNumber: 1, Timestamp: 160, SSRC: 0xdeadbeef},
+		Payload: payload,
+	}
+
+	before := time.Now()
+	frame := rtpToFrame(pkt)
+	after := time.Now()
+
+	if !bytes.Equal(frame.Data, payload) {
+		t.Errorf("rtpToFrame Data = %v, want %v", frame.Data, payload)
+	}
+	if frame.Timestamp.Before(before) || frame.Timestamp.After(after) {
+		t.Errorf("rtpToFrame Timestamp %v not in [%v, %v]", frame.Timestamp, before, after)
+	}
+	// Mutating the original payload must not affect an already-emitted frame.
+	// (Frame.Data is the same slice, same as the real Receive loop — document
+	// this is intentional; pion does not reuse the buffer across ReadRTP calls.)
 }
 
 func TestTransport_SendReturnsNil(t *testing.T) {

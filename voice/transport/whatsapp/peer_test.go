@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mahdi-awadi/gopkg/voice/pipeline"
 	pionice "github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 )
@@ -103,10 +104,10 @@ func TestNewPeer_Formats(t *testing.T) {
 	in := tp.InboundFormat()
 	out := tp.OutboundFormat()
 
-	if in.Encoding != "mulaw" || in.SampleRate != 8000 || in.Channels != 1 {
+	if in.Encoding != pipeline.EncodingMulaw || in.SampleRate != 8000 || in.Channels != 1 {
 		t.Errorf("InboundFormat = %+v, want mulaw@8k mono", in)
 	}
-	if out.Encoding != "mulaw" || out.SampleRate != 8000 || out.Channels != 1 {
+	if out.Encoding != pipeline.EncodingMulaw || out.SampleRate != 8000 || out.Channels != 1 {
 		t.Errorf("OutboundFormat = %+v, want mulaw@8k mono", out)
 	}
 }

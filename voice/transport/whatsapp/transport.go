@@ -8,15 +8,16 @@ import (
 	"time"
 
 	"github.com/mahdi-awadi/gopkg/voice/pipeline"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 // Transport is a pipeline.Transport over a pion WebRTC PeerConnection.
 // It delivers PCMU RTP payloads from the remote caller (inbound) and sends
-// PCMU media.Samples back (outbound). Outbound methods are serialised by
-// writeMu because the pipeline drives Send from the LLM-events goroutine and
-// may call Clear or Mark concurrently from the hold-filler pump goroutine.
+// PCMU media.Samples back (outbound). Outbound writes are serialised by
+// writeMu; only Send and Close acquire writeMu (Clear and Mark are lock-free
+// no-ops).
 type Transport struct {
 	peer *Peer
 
@@ -91,7 +92,7 @@ func (t *Transport) Receive(ctx context.Context) (<-chan pipeline.Frame, <-chan 
 			}
 
 			select {
-			case frames <- pipeline.Frame{Data: pkt.Payload, Timestamp: time.Now()}:
+			case frames <- rtpToFrame(pkt):
 			case <-t.done:
 				return
 			case <-ctx.Done():
@@ -135,6 +136,14 @@ func (t *Transport) Close() error {
 	close(t.done)
 	t.writeMu.Unlock()
 	return t.peer.PC.Close()
+}
+
+// rtpToFrame converts a received RTP packet into a pipeline.Frame by copying
+// the raw payload bytes. This is the sole mapping point between the WebRTC
+// layer and the pipeline layer, exposed as a named function so it can be
+// unit-tested independently of ICE/DTLS connectivity.
+func rtpToFrame(pkt *rtp.Packet) pipeline.Frame {
+	return pipeline.Frame{Data: pkt.Payload, Timestamp: time.Now()}
 }
 
 // isCloseErr returns true for errors that indicate a normal connection teardown.

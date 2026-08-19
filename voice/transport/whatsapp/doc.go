@@ -21,7 +21,8 @@
 //
 // # Concurrency
 //
-// Send, Clear, Mark, and Close acquire writeMu to serialise concurrent callers
-// (the pipeline drives Send from the LLM-events goroutine and may call Clear or
-// Mark from the hold-filler pump goroutine concurrently).
+// Only Send and Close acquire writeMu to serialise concurrent callers (Clear
+// and Mark are lock-free no-ops). The pipeline drives Send from the LLM-events
+// goroutine and may call Clear or Mark concurrently from the hold-filler pump
+// goroutine.
 package whatsapptransport
