@@ -35,8 +35,28 @@ type GeminiSetupConfig struct {
 	GenerationConfig         GeminiGenerationConfig `json:"generationConfig"`
 	SystemInstruction        *GeminiContent         `json:"systemInstruction,omitempty"`
 	Tools                    []GeminiTool           `json:"tools,omitempty"`
-	InputAudioTranscription  *struct{}              `json:"inputAudioTranscription,omitempty"`
-	OutputAudioTranscription *struct{}              `json:"outputAudioTranscription,omitempty"`
+	InputAudioTranscription  *struct{}                  `json:"inputAudioTranscription,omitempty"`
+	OutputAudioTranscription *struct{}                  `json:"outputAudioTranscription,omitempty"`
+	RealtimeInputConfig      *GeminiRealtimeInputConfig `json:"realtimeInputConfig,omitempty"`
+}
+
+// GeminiRealtimeInputConfig tunes how the Live API detects caller speech (voice
+// activity detection). It is a top-level sibling of generationConfig. Important
+// for phone calls: the default VAD is sensitive and interrupts the model's own
+// speech on ambient noise or speaker-mode echo. Lower start sensitivity requires
+// clearer speech before a barge-in fires.
+type GeminiRealtimeInputConfig struct {
+	AutomaticActivityDetection *GeminiAutomaticActivityDetection `json:"automaticActivityDetection,omitempty"`
+}
+
+// GeminiAutomaticActivityDetection configures Gemini Live's VAD. Sensitivity
+// enums: START_SENSITIVITY_LOW/HIGH, END_SENSITIVITY_LOW/HIGH.
+type GeminiAutomaticActivityDetection struct {
+	Disabled                 bool   `json:"disabled,omitempty"`
+	StartOfSpeechSensitivity string `json:"startOfSpeechSensitivity,omitempty"`
+	EndOfSpeechSensitivity   string `json:"endOfSpeechSensitivity,omitempty"`
+	PrefixPaddingMs          int    `json:"prefixPaddingMs,omitempty"`
+	SilenceDurationMs        int    `json:"silenceDurationMs,omitempty"`
 }
 
 type GeminiGenerationConfig struct {

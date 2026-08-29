@@ -22,6 +22,11 @@ type ChatTurn struct {
 	ToolName   string
 	ToolArgs   map[string]any
 	ToolResult any
+	// ToolSig is the opaque thought signature that accompanied this tool's
+	// functionCall in the model's response. Gemini 3.x REQUIRES it to be
+	// replayed on the functionCall part when the turn is sent back in history,
+	// or the request 400s ("Function call is missing a thought_signature").
+	ToolSig string
 }
 
 // ChatResponse is the model's reply.
@@ -37,6 +42,10 @@ type ToolCall struct {
 	ID   string
 	Name string
 	Args map[string]any
+	// ThoughtSignature is the opaque Gemini 3.x thinking signature returned with
+	// this functionCall; it must be preserved and replayed when the call is sent
+	// back in conversation history.
+	ThoughtSignature string
 }
 
 // ToolDecl declares a tool the model may call.
@@ -59,6 +68,9 @@ type ToolProperty struct {
 	Description string
 	Enum        []string
 	Format      string
+	// Items describes the element schema when Type == "array". Required by
+	// providers such as Gemini, which reject an array parameter that omits it.
+	Items *ToolProperty
 }
 
 // TokenUsage is best-effort token accounting.

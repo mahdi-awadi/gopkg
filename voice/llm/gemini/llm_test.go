@@ -129,8 +129,8 @@ func TestLLM_Open_SendsSetupAndReadsSetupComplete(t *testing.T) {
 	if gotSetup.Setup.InputAudioTranscription == nil {
 		t.Errorf("InputAudioTranscription missing (must be at setup level, not generationConfig)")
 	}
-	if gotSetup.Setup.OutputAudioTranscription == nil {
-		t.Errorf("OutputAudioTranscription missing (must be at setup level, not generationConfig)")
+	if gotSetup.Setup.OutputAudioTranscription != nil {
+		t.Errorf("OutputAudioTranscription present; Gemini 3.1 Flash Live rejects it during setup")
 	}
 	if gotSetup.Setup.SystemInstruction == nil ||
 		len(gotSetup.Setup.SystemInstruction.Parts) == 0 ||
@@ -252,18 +252,15 @@ func TestLLM_Open_ReplaysHistoryBeforeWakeSignal(t *testing.T) {
 	for m := range received {
 		got = append(got, m.(map[string]any))
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d messages, want 3 (2 history + 1 wake signal)", len(got))
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want 2 (user history + wake signal)", len(got))
 	}
 	if _, ok := got[0]["clientContent"]; !ok {
 		t.Errorf("msg[0] not clientContent: %+v", got[0])
 	}
-	if _, ok := got[1]["clientContent"]; !ok {
-		t.Errorf("msg[1] not clientContent: %+v", got[1])
-	}
-	cc, ok := got[2]["clientContent"].(map[string]any)
+	cc, ok := got[1]["clientContent"].(map[string]any)
 	if !ok {
-		t.Fatalf("msg[2] not clientContent (wake signal): %+v", got[2])
+		t.Fatalf("msg[1] not clientContent (wake signal): %+v", got[1])
 	}
 	turns, _ := cc["turns"].([]any)
 	if len(turns) != 1 {
@@ -276,6 +273,59 @@ func TestLLM_Open_ReplaysHistoryBeforeWakeSignal(t *testing.T) {
 	parts := turn["parts"].([]any)
 	if parts[0].(map[string]any)["text"] != testWakeSignal {
 		t.Errorf("wake signal text=%v, want %q", parts[0].(map[string]any)["text"], testWakeSignal)
+	}
+}
+
+func TestLLM_Open_DoesNotReplayAssistantHistoryAsClientContent(t *testing.T) {
+	received := make(chan any, 5)
+	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage() // setup
+		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var m map[string]any
+			_ = json.Unmarshal(raw, &m)
+			received <- m
+		}
+	})
+	defer cleanup()
+
+	req := setupReq()
+	req.History = []pipeline.HistoryTurn{
+		{Role: pipeline.RoleUser, Content: "first user"},
+		{Role: pipeline.RoleAssistant, Content: "assistant reply that Gemini Live rejects in clientContent"},
+	}
+	if err := llm.Open(context.Background(), req); err != nil {
+		t.Fatalf("Open err: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(received)
+
+	var roles []string
+	for m := range received {
+		cc, ok := m.(map[string]any)["clientContent"].(map[string]any)
+		if !ok {
+			continue
+		}
+		turns, _ := cc["turns"].([]any)
+		if len(turns) == 0 {
+			continue
+		}
+		turn, _ := turns[0].(map[string]any)
+		role, _ := turn["role"].(string)
+		roles = append(roles, role)
+	}
+
+	if len(roles) != 2 {
+		t.Fatalf("roles=%v, want user history + user wake only", roles)
+	}
+	for _, role := range roles {
+		if role != "user" {
+			t.Fatalf("roles=%v, Gemini Live rejects model role in clientContent", roles)
+		}
 	}
 }
 

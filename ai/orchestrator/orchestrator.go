@@ -50,8 +50,8 @@ func Process(ctx context.Context, registry *llm.Registry, cfg Config, userText s
 	for hop := 0; hop < cfg.MaxToolHops; hop++ {
 		req := llm.ChatRequest{
 			SystemPrompt: cfg.SystemPrompt,
-			History:      turns[:len(turns)-1],
-			UserText:     turns[len(turns)-1].Text,
+			History:      turns, // full list; tool turns render as call+response pairs
+			UserText:     "",    // no new user text on continuation hops
 			Tools:        cfg.Tools,
 			LocaleHint:   cfg.LocaleHint,
 		}
@@ -73,17 +73,10 @@ func Process(ctx context.Context, registry *llm.Registry, cfg Config, userText s
 			}
 			result, toolErr := cfg.Dispatcher(ctx, call)
 			toolHistory = append(toolHistory, ToolExecution{Call: call, Result: result, Error: toolErr})
-			turns = append(turns, llm.ChatTurn{
-				Role:       "tool",
-				ToolName:   call.Name,
-				ToolArgs:   call.Args,
-				ToolResult: result,
-			})
+			turns = append(turns, llm.ChatTurn{Role: "tool", ToolName: call.Name, ToolArgs: call.Args, ToolResult: result, ToolSig: call.ThoughtSignature})
 		}
-		turns = append(turns, llm.ChatTurn{
-			Role: "user",
-			Text: "Use the tool result above and continue with the final assistant reply.",
-		})
+		// NO synthetic user turn — the tool turns above already render as
+		// functionCall + functionResponse pairs, which is a complete continuation.
 	}
 
 	return nil, fmt.Errorf("orchestrator: tool hop limit (%d) reached without a final text reply", cfg.MaxToolHops)

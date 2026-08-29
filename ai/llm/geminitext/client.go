@@ -169,30 +169,76 @@ func (c *Client) ChatWithConfig(ctx context.Context, req llm.ChatRequest, temper
 
 func chatContents(req llm.ChatRequest) []geminiContent {
 	out := make([]geminiContent, 0, len(req.History)+1)
-	for _, turn := range req.History {
-		out = append(out, turnContent(turn))
+	h := req.History
+	for i := 0; i < len(h); {
+		if h[i].Role == "tool" {
+			// Greedily consume the maximal run of consecutive tool turns and
+			// emit ONE model content (all functionCall parts) followed by ONE
+			// user content (all functionResponse parts).  Gemini's
+			// parallel-function-calling contract requires this grouped shape;
+			// the interleaved shape (call A, resp A, call B, resp B) is
+			// off-contract and can 400 on stricter model generations.
+			j := i
+			for j < len(h) && h[j].Role == "tool" {
+				j++
+			}
+			run := h[i:j]
+			callParts := make([]geminiPart, 0, len(run))
+			respParts := make([]geminiPart, 0, len(run))
+			for _, t := range run {
+				callParts = append(callParts, geminiPart{
+					FunctionCall:     &geminiFunctionCall{Name: t.ToolName, Args: t.ToolArgs},
+					ThoughtSignature: t.ToolSig,
+				})
+				respParts = append(respParts, geminiPart{
+					FunctionResponse: &geminiFunctionResponse{
+						Name:     t.ToolName,
+						Response: map[string]any{"result": t.ToolResult},
+					},
+				})
+			}
+			out = append(out,
+				geminiContent{Role: "model", Parts: callParts},
+				geminiContent{Role: "user", Parts: respParts},
+			)
+			i = j
+			continue
+		}
+		out = append(out, turnContents(h[i])...)
+		i++
 	}
-	out = append(out, geminiContent{Role: "user", Parts: []geminiPart{{Text: req.UserText}}})
+	// Only append a trailing user turn when there is new user text. Tool-loop
+	// continuation hops pass UserText="" — the conversation already ends on a
+	// functionResponse, and an empty user part would be rejected by Gemini.
+	if req.UserText != "" {
+		out = append(out, geminiContent{Role: "user", Parts: []geminiPart{{Text: req.UserText}}})
+	}
 	return out
 }
 
-func turnContent(turn llm.ChatTurn) geminiContent {
-	role := "user"
-	if turn.Role == "assistant" {
-		role = "model"
-	}
+// turnContents renders one ChatTurn. A "tool" turn becomes a model turn carrying
+// the functionCall followed by a user turn carrying the functionResponse — the
+// pairing Gemini needs to bind a result to its call across hops.
+func turnContents(turn llm.ChatTurn) []geminiContent {
 	if turn.Role == "tool" {
-		return geminiContent{
-			Role: "function",
-			Parts: []geminiPart{{
+		return []geminiContent{
+			{Role: "model", Parts: []geminiPart{{
+				FunctionCall:     &geminiFunctionCall{Name: turn.ToolName, Args: turn.ToolArgs},
+				ThoughtSignature: turn.ToolSig,
+			}}},
+			{Role: "user", Parts: []geminiPart{{
 				FunctionResponse: &geminiFunctionResponse{
 					Name:     turn.ToolName,
 					Response: map[string]any{"result": turn.ToolResult},
 				},
-			}},
+			}}},
 		}
 	}
-	return geminiContent{Role: role, Parts: []geminiPart{{Text: turn.Text}}}
+	role := "user"
+	if turn.Role == "assistant" {
+		role = "model"
+	}
+	return []geminiContent{{Role: role, Parts: []geminiPart{{Text: turn.Text}}}}
 }
 
 func toolDecls(tools []llm.ToolDecl) []geminiFunction {
@@ -200,12 +246,7 @@ func toolDecls(tools []llm.ToolDecl) []geminiFunction {
 	for _, t := range tools {
 		props := make(map[string]geminiFunctionProperty, len(t.Parameters.Properties))
 		for name, p := range t.Parameters.Properties {
-			props[name] = geminiFunctionProperty{
-				Type:        p.Type,
-				Description: p.Description,
-				Enum:        p.Enum,
-				Format:      p.Format,
-			}
+			props[name] = toGeminiProp(p)
 		}
 		out = append(out, geminiFunction{
 			Name:        t.Name,
@@ -218,6 +259,23 @@ func toolDecls(tools []llm.ToolDecl) []geminiFunction {
 		})
 	}
 	return out
+}
+
+// toGeminiProp converts an llm.ToolProperty to Gemini's schema shape,
+// recursively carrying the array element schema (Items) so that "array"
+// parameters are accepted (Gemini rejects an array that omits "items").
+func toGeminiProp(p llm.ToolProperty) geminiFunctionProperty {
+	gp := geminiFunctionProperty{
+		Type:        p.Type,
+		Description: p.Description,
+		Enum:        p.Enum,
+		Format:      p.Format,
+	}
+	if p.Items != nil {
+		items := toGeminiProp(*p.Items)
+		gp.Items = &items
+	}
+	return gp
 }
 
 func chatResponse(resp geminiResponse) llm.ChatResponse {
@@ -239,9 +297,10 @@ func chatResponse(resp geminiResponse) llm.ChatResponse {
 		}
 		if part.FunctionCall != nil {
 			out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
-				ID:   part.FunctionCall.Name,
-				Name: part.FunctionCall.Name,
-				Args: part.FunctionCall.Args,
+				ID:               part.FunctionCall.Name,
+				Name:             part.FunctionCall.Name,
+				Args:             part.FunctionCall.Args,
+				ThoughtSignature: part.ThoughtSignature,
 			})
 		}
 	}

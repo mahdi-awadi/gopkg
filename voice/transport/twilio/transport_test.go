@@ -1,6 +1,7 @@
 package twiliotransport
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"net/http"
@@ -68,6 +69,35 @@ func TestTransport_Receive_DecodesMediaFrames(t *testing.T) {
 	}
 }
 
+func TestTransport_Receive_PacesBufferedMediaFrames(t *testing.T) {
+	tp, cleanup := dialTestServer(t, func(conn *websocket.Conn) {
+		payload := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xFF}, 160))
+		for i := 0; i < 3; i++ {
+			_ = conn.WriteJSON(TwilioMessage{
+				Event: "media",
+				Media: &TwilioMedia{Payload: payload},
+			})
+		}
+		_ = conn.WriteJSON(TwilioMessage{Event: "stop"})
+	})
+	defer cleanup()
+
+	ctx := context.Background()
+	frames, _ := tp.Receive(ctx)
+
+	var received []time.Time
+	for range frames {
+		received = append(received, time.Now())
+	}
+	if len(received) != 3 {
+		t.Fatalf("got %d frames, want 3", len(received))
+	}
+	elapsed := received[2].Sub(received[0])
+	if elapsed < 30*time.Millisecond {
+		t.Fatalf("buffered media delivered too quickly: %v", elapsed)
+	}
+}
+
 func TestTransport_StopClosesBothChannels(t *testing.T) {
 	tp, cleanup := dialTestServer(t, func(conn *websocket.Conn) {
 		_ = conn.WriteJSON(TwilioMessage{Event: "stop"})
@@ -106,7 +136,6 @@ func TestTransport_InboundAndOutboundFormats(t *testing.T) {
 		t.Errorf("outbound=%+v", out)
 	}
 }
-
 
 func TestTransport_ImplementsPipelineTransport(t *testing.T) {
 	var _ pipeline.Transport = (*Transport)(nil)

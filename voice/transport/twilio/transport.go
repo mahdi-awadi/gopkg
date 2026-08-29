@@ -64,6 +64,7 @@ func (t *Transport) Receive(ctx context.Context) (<-chan pipeline.Frame, <-chan 
 	go func() {
 		defer close(frames)
 		defer close(errs)
+		var nextFrameAt time.Time
 		for {
 			select {
 			case <-ctx.Done():
@@ -90,8 +91,22 @@ func (t *Transport) Receive(ctx context.Context) (<-chan pipeline.Frame, <-chan 
 				if err != nil {
 					continue
 				}
+				emitAt := time.Now()
+				if !nextFrameAt.IsZero() && emitAt.Before(nextFrameAt) {
+					timer := time.NewTimer(nextFrameAt.Sub(emitAt))
+					select {
+					case <-timer.C:
+						emitAt = time.Now()
+					case <-ctx.Done():
+						if !timer.Stop() {
+							<-timer.C
+						}
+						return
+					}
+				}
+				nextFrameAt = emitAt.Add(20 * time.Millisecond)
 				select {
-				case frames <- pipeline.Frame{Data: data, Timestamp: time.Now()}:
+				case frames <- pipeline.Frame{Data: data, Timestamp: emitAt}:
 				case <-ctx.Done():
 					return
 				}
@@ -105,7 +120,6 @@ func (t *Transport) Receive(ctx context.Context) (<-chan pipeline.Frame, <-chan 
 	}()
 	return frames, errs
 }
-
 
 // Send writes one outbound media frame as a TwilioOutMessage.
 func (t *Transport) Send(ctx context.Context, f pipeline.Frame) error {
@@ -164,4 +178,3 @@ func (t *Transport) Close() error {
 
 // Compile-time interface check.
 var _ pipeline.Transport = (*Transport)(nil)
-

@@ -28,10 +28,20 @@ func BuildSetup(systemPrompt string, tools []pipeline.ToolDecl) GeminiSetup {
 					},
 				},
 			},
-			SystemInstruction:        &GeminiContent{Parts: []GeminiPart{{Text: systemPrompt}}},
-			Tools:                    wireTools,
-			InputAudioTranscription:  &struct{}{},
-			OutputAudioTranscription: &struct{}{},
+			SystemInstruction:       &GeminiContent{Parts: []GeminiPart{{Text: systemPrompt}}},
+			Tools:                   wireTools,
+			InputAudioTranscription: &struct{}{},
+			// Phone-call VAD: low start sensitivity so ambient noise / speaker
+			// echo does not interrupt the model mid-reply; a clear voice still
+			// barges in. Longer silence window avoids clipping on brief pauses.
+			RealtimeInputConfig: &GeminiRealtimeInputConfig{
+				AutomaticActivityDetection: &GeminiAutomaticActivityDetection{
+					StartOfSpeechSensitivity: "START_SENSITIVITY_LOW",
+					EndOfSpeechSensitivity:   "END_SENSITIVITY_LOW",
+					PrefixPaddingMs:          300,
+					SilenceDurationMs:        600,
+				},
+			},
 		},
 	}
 }

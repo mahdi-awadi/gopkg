@@ -49,7 +49,7 @@ func (l *LLM) OutboundFormat() pipeline.AudioFormat {
 }
 
 // Open sends the setup envelope, waits for setupComplete, replays
-// SetupRequest.History as clientContent messages, then — if
+// user SetupRequest.History as clientContent messages, then — if
 // SetupRequest.Extra["wake_signal"] is a non-empty string — sends it
 // as a clientContent user turn to wake the model into producing its
 // first response. The wake payload should be a non-natural-language
@@ -69,20 +69,18 @@ func (l *LLM) Open(_ context.Context, setup pipeline.SetupRequest) error {
 		return fmt.Errorf("expected setupComplete, got: %+v", resp)
 	}
 
-	// Replay history — each turn becomes its own clientContent message.
+	// Replay only user history. Gemini Live rejects clientContent turns
+	// with role="model"; assistant output history arrives from the server
+	// stream, not as client input.
 	for _, turn := range setup.History {
-		if turn.Content == "" {
+		if turn.Content == "" || turn.Role != pipeline.RoleUser {
 			continue
-		}
-		role := "user"
-		if turn.Role == pipeline.RoleAssistant {
-			role = "model"
 		}
 		err := l.writeJSON(GeminiClientContent{
 			ClientContent: GeminiClientContentData{
 				TurnComplete: true,
 				Turns: []GeminiTurn{{
-					Role:  role,
+					Role:  "user",
 					Parts: []GeminiPart{{Text: turn.Content}},
 				}},
 			},
