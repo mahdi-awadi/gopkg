@@ -19,8 +19,8 @@ import (
 // know — and shouldn't know — about Iraqi Arabic eticket prompts or
 // Saffar Kuwaiti prompts; tests assert on values they set themselves.
 const (
-	testSystemPrompt    = "You are a helpful test assistant."
-	testGreetingTrigger = "hello, please greet the caller"
+	testSystemPrompt = "You are a helpful test assistant."
+	testWakeSignal   = "[CALL_CONNECTED]"
 )
 
 func testTools() []pipeline.ToolDecl {
@@ -64,13 +64,13 @@ func dialMockGemini(t *testing.T, handler func(*websocket.Conn)) (*LLM, func()) 
 }
 
 // setupReq builds a SetupRequest with the test system prompt + tool list
-// + greeting trigger. Tests can override individual fields by mutating
-// the returned value before passing it to Open.
+// + wake signal. Tests can override individual fields by mutating the
+// returned value before passing it to Open.
 func setupReq() pipeline.SetupRequest {
 	return pipeline.SetupRequest{
 		SystemPrompt: testSystemPrompt,
 		Tools:        testTools(),
-		Extra:        map[string]any{"greeting_trigger": testGreetingTrigger},
+		Extra:        map[string]any{"wake_signal": testWakeSignal},
 	}
 }
 
@@ -99,7 +99,7 @@ func TestLLM_Formats_MatchGopkgConvention(t *testing.T) {
 
 func TestLLM_Open_SendsSetupAndReadsSetupComplete(t *testing.T) {
 	var gotSetup GeminiSetup
-	sawGreeting := make(chan struct{}, 1)
+	sawWake := make(chan struct{}, 1)
 
 	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
 		_, raw, err := conn.ReadMessage()
@@ -110,7 +110,7 @@ func TestLLM_Open_SendsSetupAndReadsSetupComplete(t *testing.T) {
 		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
 		_, _, err = conn.ReadMessage()
 		if err == nil {
-			sawGreeting <- struct{}{}
+			sawWake <- struct{}{}
 		}
 	})
 	defer cleanup()
@@ -146,9 +146,9 @@ func TestLLM_Open_SendsSetupAndReadsSetupComplete(t *testing.T) {
 		}
 	}
 	select {
-	case <-sawGreeting:
+	case <-sawWake:
 	case <-time.After(500 * time.Millisecond):
-		t.Error("greeting trigger never sent")
+		t.Error("wake signal never sent")
 	}
 }
 
@@ -168,7 +168,7 @@ func TestLLM_Open_NoToolsWhenSetupTools_Empty(t *testing.T) {
 	})
 	defer cleanup()
 
-	req := pipeline.SetupRequest{SystemPrompt: testSystemPrompt} // no Tools, no greeting
+	req := pipeline.SetupRequest{SystemPrompt: testSystemPrompt} // no Tools, no wake signal
 	if err := llm.Open(context.Background(), req); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -177,9 +177,9 @@ func TestLLM_Open_NoToolsWhenSetupTools_Empty(t *testing.T) {
 	}
 }
 
-// When no greeting trigger is supplied, Open must not send a third
-// realtimeInput message after history replay.
-func TestLLM_Open_NoGreetingTriggerWhenAbsent(t *testing.T) {
+// When no wake signal is supplied, Open must not send any extra message
+// after history replay.
+func TestLLM_Open_NoWakeSignalWhenHistoryPresent(t *testing.T) {
 	received := make(chan any, 5)
 	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
 		_, _, _ = conn.ReadMessage() // setup
@@ -201,7 +201,7 @@ func TestLLM_Open_NoGreetingTriggerWhenAbsent(t *testing.T) {
 		History: []pipeline.HistoryTurn{
 			{Role: pipeline.RoleUser, Content: "hello"},
 		},
-		// Extra omitted → no greeting trigger.
+		// Extra omitted → no wake signal.
 	}
 	if err := llm.Open(context.Background(), req); err != nil {
 		t.Fatalf("Open err: %v", err)
@@ -213,14 +213,14 @@ func TestLLM_Open_NoGreetingTriggerWhenAbsent(t *testing.T) {
 		got = append(got, m.(map[string]any))
 	}
 	if len(got) != 1 {
-		t.Fatalf("got %d messages, want 1 (history only, no greeting)", len(got))
+		t.Fatalf("got %d messages, want 1 (history only, no wake signal)", len(got))
 	}
 	if _, ok := got[0]["clientContent"]; !ok {
 		t.Errorf("msg[0] not clientContent: %+v", got[0])
 	}
 }
 
-func TestLLM_Open_ReplaysHistoryBeforeGreeting(t *testing.T) {
+func TestLLM_Open_ReplaysHistoryBeforeWakeSignal(t *testing.T) {
 	received := make(chan any, 5)
 	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
 		_, _, _ = conn.ReadMessage() // setup
@@ -253,7 +253,7 @@ func TestLLM_Open_ReplaysHistoryBeforeGreeting(t *testing.T) {
 		got = append(got, m.(map[string]any))
 	}
 	if len(got) != 3 {
-		t.Fatalf("got %d messages, want 3 (2 history + 1 greeting)", len(got))
+		t.Fatalf("got %d messages, want 3 (2 history + 1 wake signal)", len(got))
 	}
 	if _, ok := got[0]["clientContent"]; !ok {
 		t.Errorf("msg[0] not clientContent: %+v", got[0])
@@ -261,12 +261,21 @@ func TestLLM_Open_ReplaysHistoryBeforeGreeting(t *testing.T) {
 	if _, ok := got[1]["clientContent"]; !ok {
 		t.Errorf("msg[1] not clientContent: %+v", got[1])
 	}
-	ri, ok := got[2]["realtimeInput"].(map[string]any)
+	cc, ok := got[2]["clientContent"].(map[string]any)
 	if !ok {
-		t.Fatalf("msg[2] not realtimeInput (greeting): %+v", got[2])
+		t.Fatalf("msg[2] not clientContent (wake signal): %+v", got[2])
 	}
-	if ri["text"] != testGreetingTrigger {
-		t.Errorf("greeting text=%v, want %q", ri["text"], testGreetingTrigger)
+	turns, _ := cc["turns"].([]any)
+	if len(turns) != 1 {
+		t.Fatalf("wake signal turns=%d, want 1", len(turns))
+	}
+	turn := turns[0].(map[string]any)
+	if turn["role"] != "user" {
+		t.Errorf("wake signal role=%v, want user", turn["role"])
+	}
+	parts := turn["parts"].([]any)
+	if parts[0].(map[string]any)["text"] != testWakeSignal {
+		t.Errorf("wake signal text=%v, want %q", parts[0].(map[string]any)["text"], testWakeSignal)
 	}
 }
 
@@ -290,7 +299,7 @@ func TestLLM_SendAudio_EmitsRealtimeInput(t *testing.T) {
 	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
 		_, _, _ = conn.ReadMessage() // setup
 		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
-		_, _, _ = conn.ReadMessage() // greeting
+		_, _, _ = conn.ReadMessage() // wake signal
 		_, gotRaw, _ = conn.ReadMessage()
 	})
 	defer cleanup()
@@ -321,7 +330,7 @@ func TestLLM_SendToolResults_EmitsToolResponse(t *testing.T) {
 	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
 		_, _, _ = conn.ReadMessage() // setup
 		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
-		_, _, _ = conn.ReadMessage() // greeting
+		_, _, _ = conn.ReadMessage() // wake signal
 		_, gotRaw, _ = conn.ReadMessage()
 	})
 	defer cleanup()
@@ -355,7 +364,7 @@ func TestLLM_InjectTurn_EmitsClientContent(t *testing.T) {
 	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
 		_, _, _ = conn.ReadMessage() // setup
 		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
-		_, _, _ = conn.ReadMessage() // greeting
+		_, _, _ = conn.ReadMessage() // wake signal
 		_, gotRaw, _ = conn.ReadMessage()
 	})
 	defer cleanup()
@@ -584,5 +593,155 @@ func TestLLM_Events_TranslatesToolCall(t *testing.T) {
 	}
 	if toolCalls[0].ID != "c1" || toolCalls[0].Name != "get_user_bookings" {
 		t.Errorf("call=%+v", toolCalls[0])
+	}
+}
+
+// TestLLM_Open_SendsWakeSignalAsClientContent — the new contract:
+// Extra["wake_signal"] is delivered as a clientContent user turn (not
+// realtimeInput). Saffar relies on this so Gemini treats the wake
+// payload as a system signal, not as user speech (which caused the
+// 2026-05-13 role-inversion bug).
+func TestLLM_Open_SendsWakeSignalAsClientContent(t *testing.T) {
+	writes := make(chan []byte, 5)
+	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage() // setup
+		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			writes <- raw
+		}
+	})
+	defer cleanup()
+
+	err := llm.Open(context.Background(), pipeline.SetupRequest{
+		SystemPrompt: "you are a test agent",
+		Tools:        nil,
+		History:      nil,
+		Extra: map[string]any{
+			"wake_signal": "[CALL_CONNECTED]",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Drain whatever the client sent after setup.
+	time.Sleep(50 * time.Millisecond)
+	close(writes)
+	var got [][]byte
+	for raw := range writes {
+		got = append(got, raw)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 client write after setup (wake signal), got %d", len(got))
+	}
+	var first map[string]any
+	if err := json.Unmarshal(got[0], &first); err != nil {
+		t.Fatalf("unmarshal write: %v", err)
+	}
+	cc, ok := first["clientContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("write missing clientContent: %s", got[0])
+	}
+	turns, _ := cc["turns"].([]any)
+	if len(turns) != 1 {
+		t.Fatalf("expected 1 turn, got %d", len(turns))
+	}
+	turn := turns[0].(map[string]any)
+	if turn["role"] != "user" {
+		t.Errorf("wake signal role = %q, want %q", turn["role"], "user")
+	}
+	parts := turn["parts"].([]any)
+	if parts[0].(map[string]any)["text"] != "[CALL_CONNECTED]" {
+		t.Errorf("wake signal text mismatch: %v", parts[0])
+	}
+	if cc["turnComplete"] != true {
+		t.Errorf("wake signal must have turnComplete=true")
+	}
+}
+
+// TestLLM_Open_NoWakeSignalWhenAbsent — when Extra has no wake_signal
+// (and no history), Open must send only the setup message and nothing
+// else. The model stays silent until the caller speaks.
+func TestLLM_Open_NoWakeSignalWhenAbsent(t *testing.T) {
+	writes := make(chan []byte, 5)
+	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage() // setup (consumed, not recorded)
+		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			writes <- raw
+		}
+	})
+	defer cleanup()
+
+	err := llm.Open(context.Background(), pipeline.SetupRequest{
+		SystemPrompt: "you are a test agent",
+		Extra:        map[string]any{}, // no wake_signal
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	close(writes)
+	var got [][]byte
+	for raw := range writes {
+		got = append(got, raw)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no client writes after setup, got %d: %s", len(got), got)
+	}
+}
+
+// TestLLM_Open_GreetingTriggerNoLongerSent — regression guard for
+// saffar's 2026-05-13 role-inversion bug. The old greeting_trigger key
+// must not produce any realtimeInput (or any other write) after setup.
+func TestLLM_Open_GreetingTriggerNoLongerSent(t *testing.T) {
+	writes := make(chan []byte, 5)
+	llm, cleanup := dialMockGemini(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage() // setup (consumed, not recorded)
+		_ = conn.WriteJSON(GeminiServerMessage{SetupComplete: &struct{}{}})
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			writes <- raw
+		}
+	})
+	defer cleanup()
+
+	err := llm.Open(context.Background(), pipeline.SetupRequest{
+		SystemPrompt: "you are a test agent",
+		Extra: map[string]any{
+			"greeting_trigger": "أهلاً وسهلاً",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	close(writes)
+	var got [][]byte
+	for raw := range writes {
+		got = append(got, raw)
+	}
+	for i, w := range got {
+		var m map[string]any
+		_ = json.Unmarshal(w, &m)
+		if _, isRealtime := m["realtimeInput"]; isRealtime {
+			t.Errorf("write %d is realtimeInput (greeting_trigger reactivated): %s", i, w)
+		}
+	}
+	if len(got) != 0 {
+		t.Errorf("expected no client writes after setup (greeting_trigger ignored), got %d: %s", len(got), got)
 	}
 }

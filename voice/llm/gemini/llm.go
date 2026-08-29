@@ -27,8 +27,8 @@ type LLM struct {
 // NewLLM constructs an LLM over an already-dialed Gemini Live WS. The
 // dial (with API key + URL) is done by the caller — this keeps the
 // adapter independent of how credentials are sourced. Per-session
-// configuration (system prompt, tool list, history, optional greeting
-// trigger) is supplied via pipeline.SetupRequest at Open time.
+// configuration (system prompt, tool list, history, optional wake
+// signal) is supplied via pipeline.SetupRequest at Open time.
 func NewLLM(conn *websocket.Conn) *LLM {
 	return &LLM{conn: conn}
 }
@@ -50,10 +50,12 @@ func (l *LLM) OutboundFormat() pipeline.AudioFormat {
 
 // Open sends the setup envelope, waits for setupComplete, replays
 // SetupRequest.History as clientContent messages, then — if
-// SetupRequest.Extra["greeting_trigger"] is a non-empty string — sends
-// it as a realtimeInput text message to kick the model into speaking.
-// If no greeting trigger is supplied the model stays silent until the
-// caller speaks.
+// SetupRequest.Extra["wake_signal"] is a non-empty string — sends it
+// as a clientContent user turn to wake the model into producing its
+// first response. The wake payload should be a non-natural-language
+// tag (e.g. "[CALL_CONNECTED]") so the model treats it as a system
+// signal and not as user speech. Without a wake signal the model
+// stays silent until the caller speaks.
 func (l *LLM) Open(_ context.Context, setup pipeline.SetupRequest) error {
 	if err := l.writeJSON(BuildSetup(setup.SystemPrompt, setup.Tools)); err != nil {
 		return fmt.Errorf("send setup: %w", err)
@@ -90,12 +92,23 @@ func (l *LLM) Open(_ context.Context, setup pipeline.SetupRequest) error {
 		}
 	}
 
-	// Optional greeting trigger — caller-supplied via Extra.
-	if trig, _ := setup.Extra["greeting_trigger"].(string); trig != "" {
-		if err := l.writeJSON(GeminiRealtimeInput{
-			RealtimeInput: GeminiRealtimeInputData{Text: trig},
+	// Optional non-content wake signal — caller-supplied via Extra.
+	// Sent as a clientContent user turn so the model produces its first
+	// response based on the system prompt. Use a bracketed tag like
+	// "[CALL_CONNECTED]" — anything that's clearly not natural language —
+	// to avoid the role-inversion bug where the model treats the wake
+	// payload as something the user said.
+	if wake, _ := setup.Extra["wake_signal"].(string); wake != "" {
+		if err := l.writeJSON(GeminiClientContent{
+			ClientContent: GeminiClientContentData{
+				TurnComplete: true,
+				Turns: []GeminiTurn{{
+					Role:  "user",
+					Parts: []GeminiPart{{Text: wake}},
+				}},
+			},
 		}); err != nil {
-			return fmt.Errorf("send greeting trigger: %w", err)
+			return fmt.Errorf("send wake signal: %w", err)
 		}
 	}
 	return nil
