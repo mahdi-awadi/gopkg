@@ -13,8 +13,23 @@ const defaultSTUN = "stun:stun.l.google.com:19302"
 
 // Config holds optional configuration for the WebRTC PeerConnection.
 type Config struct {
-	// ICEServers overrides the default STUN server. When empty, stun.l.google.com:19302 is used.
+	// ICEServers overrides the default STUN server. When empty AND PublicIP is
+	// unset, stun.l.google.com:19302 is used.
 	ICEServers []webrtc.ICEServer
+
+	// PublicIP, when set, makes pion advertise a 1:1-NAT host candidate at this
+	// IP instead of relying on STUN. Required when the process runs inside a
+	// Docker bridge network: the container's own IP (e.g. 172.x/192.168.x) is
+	// unreachable by the remote peer, and the STUN-discovered srflx port is not
+	// published, so media (DTLS/SRTP) never arrives and the call answers but is
+	// silent. Pair with UDPPortMin/Max + a published port range.
+	PublicIP string
+
+	// UDPPortMin/UDPPortMax pin ICE/media to a fixed UDP port range so those
+	// ports can be published from the container. Zero means "any ephemeral
+	// port" (only usable with host networking or PublicIP unset).
+	UDPPortMin uint16
+	UDPPortMax uint16
 
 	// settingEngine is an optional SettingEngine injected by tests to control
 	// ICE timeouts and other low-level parameters. Not part of the public API.
@@ -41,8 +56,11 @@ type Peer struct {
 // Opus 48000/2 only, and gathers ICE candidates before returning. The returned
 // Peer.AnswerSDP is the complete answer to send back to the WhatsApp caller.
 func NewPeer(ctx context.Context, offerSDP string, cfg Config) (*Peer, error) {
+	// STUN is only needed to discover a public (srflx) candidate. When PublicIP
+	// is configured we advertise a directly-reachable 1:1-NAT host candidate
+	// instead, so STUN is skipped.
 	iceServers := cfg.ICEServers
-	if len(iceServers) == 0 {
+	if len(iceServers) == 0 && cfg.PublicIP == "" {
 		iceServers = []webrtc.ICEServer{{URLs: []string{defaultSTUN}}}
 	}
 
@@ -60,9 +78,31 @@ func NewPeer(ctx context.Context, offerSDP string, cfg Config) (*Peer, error) {
 		return nil, err
 	}
 
+	// SettingEngine: tests inject their own; in production a configured PublicIP
+	// makes pion emit a 1:1-NAT host candidate at that IP and (when a port range
+	// is given) bind media to a fixed, publishable UDP port range. Without this,
+	// inside a Docker bridge network the only candidates are the unreachable
+	// container IP and an unpublished STUN srflx port, so the call answers but
+	// carries no audio.
+	var se webrtc.SettingEngine
+	haveSE := false
+	switch {
+	case cfg.settingEngine != nil:
+		se = *cfg.settingEngine
+		haveSE = true
+	case cfg.PublicIP != "":
+		se.SetNAT1To1IPs([]string{cfg.PublicIP}, webrtc.ICECandidateTypeHost)
+		if cfg.UDPPortMin > 0 && cfg.UDPPortMax >= cfg.UDPPortMin {
+			if err := se.SetEphemeralUDPPortRange(cfg.UDPPortMin, cfg.UDPPortMax); err != nil {
+				return nil, err
+			}
+		}
+		haveSE = true
+	}
+
 	apiOpts := []func(*webrtc.API){webrtc.WithMediaEngine(me)}
-	if cfg.settingEngine != nil {
-		apiOpts = append(apiOpts, webrtc.WithSettingEngine(*cfg.settingEngine))
+	if haveSE {
+		apiOpts = append(apiOpts, webrtc.WithSettingEngine(se))
 	}
 
 	api := webrtc.NewAPI(apiOpts...)

@@ -59,8 +59,21 @@ type Transport struct {
 	// 20 ms frame (480 samples @24k) to encode.
 	sendBuf []int16
 
+	// outQueue holds encoded Opus frames awaiting paced transmission. The
+	// paceSender goroutine drains it at real time (one 20 ms frame every 20 ms)
+	// so Gemini's faster-than-real-time audio bursts don't overflow the caller's
+	// jitter buffer (which caused "first few words then silence").
+	outQueue chan []byte
+
+	// silenceFrame is a pre-encoded 20 ms Opus silence packet. paceSender writes
+	// it whenever the queue is momentarily empty so the outbound RTP stream is
+	// CONTINUOUS (monotonic timestamps, one frame every 20 ms). Gaps in the RTP
+	// timeline break the caller's playout clock — that, not the burst, is the
+	// real cause of choppy/cut-out audio.
+	silenceFrame []byte
+
 	closed bool
-	done   chan struct{} // closed by Close() to unblock Receive goroutine
+	done   chan struct{} // closed by Close() to unblock Receive + paceSender
 }
 
 // New wraps the negotiated Peer in a pipeline.Transport. Close() closes both
@@ -76,13 +89,61 @@ func New(p *Peer) (*Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Transport{
-		peer:    p,
-		dec:     dec,
-		enc:     enc,
-		sendBuf: make([]int16, 0, outFrameSamples*2),
-		done:    make(chan struct{}),
-	}, nil
+	// Pre-encode one 20 ms Opus silence frame (480 zero samples @24k) for gap fill.
+	silenceBuf := make([]byte, maxOpusBuf)
+	sn, err := enc.Encode(make([]int16, outFrameSamples), silenceBuf)
+	if err != nil {
+		return nil, err
+	}
+
+	t := &Transport{
+		peer:         p,
+		dec:          dec,
+		enc:          enc,
+		sendBuf:      make([]int16, 0, outFrameSamples*2),
+		outQueue:     make(chan []byte, 1000), // ~20 s of 20 ms frames
+		silenceFrame: append([]byte(nil), silenceBuf[:sn]...),
+		done:         make(chan struct{}),
+	}
+	go t.paceSender()
+	return t, nil
+}
+
+// paceSender writes exactly one 20 ms Opus frame every 20 ms on a drift-free
+// deadline clock — a queued frame when available, otherwise the pre-encoded
+// silence frame. The CONTINUOUS stream (no skipped ticks) keeps RTP timestamps
+// monotonic and the caller's playout clock locked, which is what actually fixes
+// the choppy/cut-out audio. Stops when Close() closes done.
+func (t *Transport) paceSender() {
+	frameDur := outFrameMs * time.Millisecond
+	next := time.Now()
+	for {
+		select {
+		case <-t.done:
+			return
+		default:
+		}
+
+		next = next.Add(frameDur)
+		if wait := time.Until(next); wait > 0 {
+			select {
+			case <-t.done:
+				return
+			case <-time.After(wait):
+			}
+		} else if wait < -time.Second {
+			// Fell far behind (e.g. scheduler stall) — resync instead of bursting.
+			next = time.Now()
+		}
+
+		frame := t.silenceFrame
+		select {
+		case q := <-t.outQueue:
+			frame = q
+		default:
+		}
+		_ = t.peer.localTrack.WriteSample(media.Sample{Data: frame, Duration: frameDur})
+	}
 }
 
 // InboundFormat reports the format of frames emitted by Receive: pcm16le@16k mono.
@@ -180,33 +241,42 @@ func (t *Transport) Send(_ context.Context, f pipeline.Frame) error {
 	samples := bytesToInt16LE(f.Data)
 	t.sendBuf = append(t.sendBuf, samples...)
 
-	opusBuf := make([]byte, maxOpusBuf)
-
-	// Encode in fixed 480-sample (20 ms @24k) chunks.
+	// Encode in fixed 480-sample (20 ms @24k) chunks and ENQUEUE them; the
+	// paceSender goroutine writes them to the wire at real time. A fresh buffer
+	// per frame is required because the encoded slice lives in the queue until
+	// the pacer consumes it (no reuse).
 	for len(t.sendBuf) >= outFrameSamples {
 		frame := append([]int16(nil), t.sendBuf[:outFrameSamples]...)
 		t.sendBuf = t.sendBuf[outFrameSamples:]
 
+		opusBuf := make([]byte, maxOpusBuf)
 		n, encErr := t.enc.Encode(frame, opusBuf)
 		if encErr != nil {
 			return encErr
 		}
 
-		// WriteSample lets pion handle RTP timestamping from Duration on the
-		// 48k Opus clock; we do not compute timestamps manually.
-		if err := t.peer.localTrack.WriteSample(media.Sample{
-			Data:     opusBuf[:n],
-			Duration: outFrameMs * time.Millisecond,
-		}); err != nil {
-			return err
+		select {
+		case t.outQueue <- opusBuf[:n]:
+		default:
+			// Queue full (>~20 s backlog) — drop to bound latency rather than
+			// block the pipeline's read loop.
 		}
 	}
 	return nil
 }
 
-// Clear is a no-op for pion — TrackLocalStaticSample does not buffer queued
-// audio. Interruptions are handled by the pipeline ceasing to call Send.
-func (t *Transport) Clear(_ context.Context) error { return nil }
+// Clear drops all queued outbound audio immediately. The pipeline calls this on
+// caller interruption (barge-in) so the AI stops mid-reply at once instead of
+// finishing a now-stale sentence from the paced queue.
+func (t *Transport) Clear(_ context.Context) error {
+	for {
+		select {
+		case <-t.outQueue:
+		default:
+			return nil
+		}
+	}
+}
 
 // Mark is a no-op for pion — WebRTC has no native named sync-point mechanism.
 func (t *Transport) Mark(_ context.Context, _ string) error { return nil }
