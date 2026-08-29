@@ -29,6 +29,7 @@ use (
 	./communication/sms/twilio
 	./communication/telegram
 	./communication/voice/twilio
+	./communication/whatsapp/adminli
 	./communication/whatsapp/meta
 	./communication/whatsapp/twilio
 	./crypto/password
