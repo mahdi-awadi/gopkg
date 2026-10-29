@@ -15,6 +15,7 @@ import (
 	commonNats "github.com/mahdi-awadi/eticket-v3/services/common/nats"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/auth"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/client"
+	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/formatter"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/handlers"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/ratelimit"
 )
@@ -289,42 +290,32 @@ func (m *BotManager) SendTicketNotification(partnerID string, chatID int64, tick
 		return 0, fmt.Errorf("no bot for partner %s", partnerID)
 	}
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("🎫 New support ticket #%s\n", ticket.TicketNumber))
-	sb.WriteString(fmt.Sprintf("تذكرة دعم جديدة #%s\n\n", ticket.TicketNumber))
-	if ticket.CustomerName != "" {
-		sb.WriteString(fmt.Sprintf("👤 %s\n", ticket.CustomerName))
-	}
-	if ticket.CustomerPhone != "" {
-		sb.WriteString(fmt.Sprintf("📱 %s\n", ticket.CustomerPhone))
-	}
-	if ticket.Channel != "" {
-		sb.WriteString(fmt.Sprintf("📍 %s\n", ticket.Channel))
-	}
-	sb.WriteString(fmt.Sprintf("📂 %s | ⚡ %s\n", ticket.Category, ticket.Priority))
-	if ticket.Reason != "" {
-		sb.WriteString(fmt.Sprintf("🔄 %s\n", ticket.Reason))
-	}
-	if ticket.InitialMessage != "" {
-		sb.WriteString(fmt.Sprintf("\n💬 \"%s\"\n", ticket.InitialMessage))
-	}
-	if ticket.AISummary != "" {
-		sb.WriteString(fmt.Sprintf("\n🤖 AI Summary:\n%s\n", ticket.AISummary))
-	}
+	msgs := m.handlers.Formatter
+	text := msgs.TicketNotification(formatter.TicketNotice{
+		Number:         ticket.TicketNumber,
+		CustomerName:   ticket.CustomerName,
+		CustomerPhone:  ticket.CustomerPhone,
+		Channel:        ticket.Channel,
+		Category:       ticket.Category,
+		Priority:       ticket.Priority,
+		Reason:         ticket.Reason,
+		InitialMessage: ticket.InitialMessage,
+		AISummary:      ticket.AISummary,
+	}, isAcceptable)
 
 	if isAcceptable {
 		// Unassigned ticket — show Accept button
 		keyboard := &tele.ReplyMarkup{}
-		acceptBtn := keyboard.Data("✅ Accept / قبول", "accept_ticket", ticket.TicketID)
+		acceptBtn := keyboard.Data(msgs.AcceptTicketButton(), "accept_ticket", ticket.TicketID)
 		keyboard.Inline(keyboard.Row(acceptBtn))
-		return bot.SendToChat(chatID, sb.String(), keyboard)
+		return bot.SendToChat(chatID, text, keyboard)
 	}
 
 	// Assigned ticket — show Reply and Resolve buttons
 	keyboard := &tele.ReplyMarkup{}
-	resolveBtn := keyboard.Data("✅ Resolve / حل", "resolve_ticket", ticket.TicketID)
+	resolveBtn := keyboard.Data(msgs.ResolveTicketButton(), "resolve_ticket", ticket.TicketID)
 	keyboard.Inline(keyboard.Row(resolveBtn))
-	return bot.SendToChat(chatID, sb.String()+"\n\nReply to this message to respond to the customer.\nيمكنك الرد على هذه الرسالة للتواصل مع العميل.", keyboard)
+	return bot.SendToChat(chatID, text, keyboard)
 }
 
 // SendCustomerReplyNotification forwards a customer reply to the agent.
@@ -343,11 +334,11 @@ func (m *BotManager) SendCustomerReplyNotification(partnerID string, chatID int6
 		preview = preview[:200] + "..."
 	}
 
-	text := fmt.Sprintf("💬 Customer reply on #%s:\n\n%s\n\nرد العميل على #%s:\n%s\n\nReply to this message to respond.\nرد على هذه الرسالة للتواصل.", msg.TicketNumber, preview, msg.TicketNumber, preview)
+	text := m.handlers.Formatter.CustomerReplyNotification(msg.TicketNumber, preview)
 
 	if isAcceptable {
 		keyboard := &tele.ReplyMarkup{}
-		acceptBtn := keyboard.Data("✅ Accept / قبول", "accept_ticket", msg.TicketID)
+		acceptBtn := keyboard.Data(m.handlers.Formatter.AcceptTicketButton(), "accept_ticket", msg.TicketID)
 		keyboard.Inline(keyboard.Row(acceptBtn))
 		return bot.SendToChat(chatID, text, keyboard)
 	}
@@ -364,11 +355,7 @@ func (m *BotManager) SendRatingNotification(partnerID string, chatID int64, even
 		return fmt.Errorf("no bot for partner %s", partnerID)
 	}
 
-	stars := strings.Repeat("⭐", event.Rating)
-	text := fmt.Sprintf("📊 Customer rated ticket #%s: %s (%d/5)", event.TicketNumber, stars, event.Rating)
-	if event.Comment != "" {
-		text += fmt.Sprintf("\nComment: %s", event.Comment)
-	}
+	text := m.handlers.Formatter.RatingNotification(event.TicketNumber, event.Rating, event.Comment)
 
 	_, err := bot.SendToChat(chatID, text)
 	return err

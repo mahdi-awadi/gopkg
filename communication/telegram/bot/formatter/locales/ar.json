@@ -1,0 +1,105 @@
+{
+  "brand": {
+    "neutral": "الحجوزات"
+  },
+  "welcome": {
+    "intro": "مرحباً! 👋\nأنا بوت {{.partnerName}}. يمكنني مساعدتك في:",
+    "commands": "🤖 /ai — المساعد الذكي (بحث رحلات، رصيد، حجوزات...)\n💰 /balance — رصيد المحفظة\n✈️ /mybookings — حجوزاتي\n🌐 /lang — تغيير اللغة\n❓ /help — المساعدة",
+    "support_commands": "🎧 أوامر الدعم:\n📋 /tickets — تذاكري\n✅ /resolve — حل تذكرة",
+    "admin_commands": "🔧 أوامر المسؤول:\n⚙️ /admin — لوحة المسؤول\n💱 /setrate — تحديث سعر العملة\n💳 /addcredit — إيداع رصيد"
+  },
+  "ai": {
+    "entered": "🤖 مساعد {{.partnerName}} الذكي جاهز!\nاكتب سؤالك وسأساعدك (بحث رحلات، رصيد، حجوزات...)\n\nأرسل /cancel للخروج."
+  },
+  "language": {
+    "prompt": "اختر اللغة:",
+    "button": "🇮🇶 العربية",
+    "changed": "✅ تم تغيير اللغة إلى العربية"
+  },
+  "session": {
+    "cancelled": "❌ تم إلغاء العملية",
+    "expired": "⏰ انتهت الجلسة. أعد المحاولة باستخدام {{.command}}",
+    "not_authenticated": "🔒 أرسل /start للبدء",
+    "rate_limited": "⏳ طلبات كثيرة. يرجى الانتظار قليلاً",
+    "invalid_input": "❌ إدخال غير صالح. حاول مرة أخرى"
+  },
+  "wallet": {
+    "balance": "💰 الرصيد: {{.balance}} {{.currency}}"
+  },
+  "bookings": {
+    "none": "📋 لا توجد حجوزات",
+    "item": "✈️ {{.reference}}\n{{.destination}} ← {{.origin}}\n📅 {{.date}} | الحالة: {{.status}}"
+  },
+  "error": {
+    "session_expired": "⚠️ انتهت الجلسة. أرسل /start للإتصال",
+    "forbidden": "⚠️ ليس لديك صلاحية لهذا الإجراء",
+    "not_found": "⚠️ غير موجود",
+    "generic": "⚠️ حدث خطأ. يرجى المحاولة لاحقاً",
+    "service_unavailable": "⚠️ الخدمة غير متاحة مؤقتاً"
+  },
+  "admin": {
+    "menu": "🔧 لوحة المسؤول\nاختر إجراء:",
+    "button": {
+      "set_rate": "💱 تحديث سعر العملة",
+      "add_credit": "💳 إيداع رصيد"
+    },
+    "set_rate": {
+      "choose_currency": "💱 اختر العملة لتحديث سعرها:",
+      "currency_line": "• {{.code}} — {{.name}} ({{.rate}})",
+      "send_code": "أرسل رمز العملة (مثال: USD)",
+      "send_rate": "💱 أرسل سعر الصرف الجديد للعملة {{.code}}:",
+      "success": "✅ تم تحديث سعر {{.code}} إلى {{.rate}}"
+    },
+    "add_credit": {
+      "send_user_id": "💳 أرسل معرف المستخدم (UUID):",
+      "send_amount": "💳 أرسل المبلغ والعملة (مثال: 100 USD):",
+      "send_note": "💳 أرسل ملاحظة (أو أرسل - للتخطي):",
+      "success": "✅ تم إيداع {{.amount}} {{.currency}}\nمعرف العملية: {{.transactionID}}"
+    }
+  },
+  "action": {
+    "cancel_button": "❌ إلغاء"
+  },
+  "callback": {
+    "not_authenticated": "غير مسجل الدخول",
+    "invalid_ticket": "تذكرة غير صالحة",
+    "resolve_failed": "تعذر حل التذكرة",
+    "error": "خطأ"
+  },
+  "support": {
+    "no_permission": "ليس لديك صلاحية الدعم الفني.",
+    "tickets": {
+      "none": "لا توجد تذاكر مسندة إليك حالياً.",
+      "header": "📋 تذاكرك:",
+      "line": "🎫 #{{.number}} — {{.category}} [{{.status}}]"
+    },
+    "ticket": {
+      "no_active_to_resolve": "لا توجد تذكرة نشطة لحلها.",
+      "resolved_chat_ended": "✅ تم حل التذكرة وإنهاء المحادثة.",
+      "already_claimed": "❌ هذه التذكرة مسندة لوكيل آخر بالفعل.",
+      "assigned": "✅ تم إسناد التذكرة {{.ticketID}} إليك. يمكنك الكتابة مباشرة للتواصل مع العميل.",
+      "resolved": "✅ تم حل التذكرة {{.ticketID}}",
+      "no_active": "لا توجد تذكرة نشطة. اضغط [قبول] على إشعار تذكرة للبدء.",
+      "reply_sent": "✅ تم إرسال ردك للعميل.\nلإنهاء المحادثة: /resolve"
+    },
+    "button": {
+      "accept": "قبول",
+      "resolve": "حل"
+    },
+    "notify": {
+      "new_ticket": "تذكرة دعم جديدة #{{.number}}",
+      "customer": "👤 {{.name}}",
+      "phone": "📱 {{.phone}}",
+      "channel": "📍 {{.channel}}",
+      "category_priority": "📂 {{.category}} | ⚡ {{.priority}}",
+      "reason": "🔄 {{.reason}}",
+      "initial_message": "💬 \"{{.message}}\"",
+      "ai_summary": "🤖 ملخص الذكاء الاصطناعي:\n{{.summary}}",
+      "reply_to_customer_hint": "يمكنك الرد على هذه الرسالة للتواصل مع العميل.",
+      "customer_reply": "رد العميل على #{{.number}}:\n{{.preview}}",
+      "reply_hint": "رد على هذه الرسالة للتواصل.",
+      "rating": "📊 قيّم العميل التذكرة #{{.number}}: {{.stars}} ({{.rating}}/5)",
+      "rating_comment": "التعليق: {{.comment}}"
+    }
+  }
+}

@@ -12,7 +12,6 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/client"
-	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/formatter"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/state"
 )
 
@@ -24,7 +23,7 @@ func (h *HandlerSet) HandleAdmin(partnerID string) tele.HandlerFunc {
 		if err != nil || sess == nil {
 			return c.Send(h.Formatter.NotAuthenticated("en"))
 		}
-		return c.Send(h.Formatter.AdminMenu(sess.Lang), formatter.AdminMenuKeyboard(sess.Lang))
+		return c.Send(h.Formatter.AdminMenu(sess.Lang), h.Formatter.AdminMenuKeyboard(sess.Lang))
 	}
 }
 
@@ -69,7 +68,7 @@ func (h *HandlerSet) startSetRate(c tele.Context, partnerID string) error {
 
 	return c.Send(
 		h.Formatter.SetRatePromptCurrency(sess.Lang, currencies.Currencies),
-		formatter.CancelKeyboard(sess.Lang),
+		h.Formatter.CancelKeyboard(sess.Lang),
 	)
 }
 
@@ -105,7 +104,7 @@ func (h *HandlerSet) startAddCredit(c tele.Context, partnerID string) error {
 
 	return c.Send(
 		h.Formatter.AddCreditPromptUserID(sess.Lang),
-		formatter.CancelKeyboard(sess.Lang),
+		h.Formatter.CancelKeyboard(sess.Lang),
 	)
 }
 
@@ -131,7 +130,7 @@ func (h *HandlerSet) HandleSetRateStep(c tele.Context, partnerID string, cs *sta
 		_ = h.State.Set(ctx, partnerID, senderID, cs)
 		return c.Send(
 			h.Formatter.SetRatePromptRate(sess.Lang, code),
-			formatter.CancelKeyboard(sess.Lang),
+			h.Formatter.CancelKeyboard(sess.Lang),
 		)
 
 	case 2: // Expect rate value
@@ -195,7 +194,7 @@ func (h *HandlerSet) HandleAddCreditStep(c tele.Context, partnerID string, cs *s
 		_ = h.State.Set(ctx, partnerID, senderID, cs)
 		return c.Send(
 			h.Formatter.AddCreditPromptAmount(sess.Lang),
-			formatter.CancelKeyboard(sess.Lang),
+			h.Formatter.CancelKeyboard(sess.Lang),
 		)
 
 	case 2: // Expect amount + currency (e.g., "100 USD")
@@ -215,7 +214,7 @@ func (h *HandlerSet) HandleAddCreditStep(c tele.Context, partnerID string, cs *s
 		_ = h.State.Set(ctx, partnerID, senderID, cs)
 		return c.Send(
 			h.Formatter.AddCreditPromptNote(sess.Lang),
-			formatter.CancelKeyboard(sess.Lang),
+			h.Formatter.CancelKeyboard(sess.Lang),
 		)
 
 	case 3: // Expect note

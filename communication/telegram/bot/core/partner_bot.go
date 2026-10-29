@@ -8,7 +8,6 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/auth"
-	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/formatter"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/handlers"
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/ratelimit"
 )
@@ -148,7 +147,7 @@ func (pb *PartnerBot) rateLimitMiddleware(next tele.HandlerFunc) tele.HandlerFun
 			pb.logger.Warn("rate limit check failed", zap.Error(err))
 		}
 		if !allowed {
-			return c.Send(formatter.NewMessages().RateLimited("en"))
+			return c.Send(pb.handlers.Formatter.RateLimited("en"))
 		}
 		return next(c)
 	}
