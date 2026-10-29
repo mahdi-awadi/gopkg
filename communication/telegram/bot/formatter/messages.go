@@ -1,253 +1,251 @@
 package formatter
 
 import (
+	"context"
+	"embed"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+
+	"github.com/nicksnyder/go-i18n/v2/i18n"
+	"golang.org/x/text/language"
 
 	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/client"
 )
 
-// Messages provides bilingual message formatting.
-type Messages struct{}
+//go:embed locales/*.json
+var locales embed.FS
 
-func NewMessages() *Messages {
-	return &Messages{}
+// catalogueFiles are the embedded Message catalogues, one per Session language.
+// English is the bundle default, so any other Session language reads as English.
+var catalogueFiles = []string{"locales/en.json", "locales/ar.json"}
+
+// PartnerNameFunc returns the Partner name a partner's bot introduces itself
+// with. It returns "" when the name is unknown.
+type PartnerNameFunc func(ctx context.Context, partnerID string) string
+
+// Messages renders every bot Reply from the embedded Message catalogues.
+// It is safe for concurrent use.
+type Messages struct {
+	bundle      *i18n.Bundle
+	partnerName PartnerNameFunc
 }
 
-// Welcome returns the /start welcome message.
-func (m *Messages) Welcome(lang string, isAdmin bool, isSupportAgent ...bool) string {
+// NewMessages loads the Message catalogues. partnerName may be nil; then (and
+// whenever it returns "") branded Replies use the catalogue's Neutral name.
+func NewMessages(partnerName PartnerNameFunc) (*Messages, error) {
+	bundle := i18n.NewBundle(language.English)
+	bundle.RegisterUnmarshalFunc("json", json.Unmarshal)
+	for _, f := range catalogueFiles {
+		if _, err := bundle.LoadMessageFileFS(locales, f); err != nil {
+			return nil, fmt.Errorf("telegram bot: load message catalogue %s: %w", f, err)
+		}
+	}
+	return &Messages{bundle: bundle, partnerName: partnerName}, nil
+}
+
+// vars is the template data of one Reply.
+type vars map[string]any
+
+// t renders message id in lang. A missing message falls back to English and
+// then to the id itself, so a Reply is never empty.
+func (m *Messages) t(lang, id string, data vars) string {
+	s, err := i18n.NewLocalizer(m.bundle, lang).Localize(&i18n.LocalizeConfig{MessageID: id, TemplateData: data})
+	if err != nil || s == "" {
+		if lang != "en" {
+			return m.t("en", id, data)
+		}
+		return id
+	}
+	return s
+}
+
+// bilingual renders id in English and Arabic joined by sep, for Replies that
+// are shown before the user's Session language is known (or to agents in both).
+func (m *Messages) bilingual(id, sep string, data vars) string {
+	return m.t("en", id, data) + sep + m.t("ar", id, data)
+}
+
+// name returns the Partner name for partnerID, or the Neutral name in lang.
+func (m *Messages) name(ctx context.Context, partnerID, lang string) string {
+	if m.partnerName != nil {
+		if n := strings.TrimSpace(m.partnerName(ctx, partnerID)); n != "" {
+			return n
+		}
+	}
+	return m.t(lang, "brand.neutral", nil)
+}
+
+// Welcome returns the /start welcome message for partnerID's bot.
+func (m *Messages) Welcome(ctx context.Context, partnerID, lang string, isAdmin bool, isSupportAgent ...bool) string {
 	isSupport := len(isSupportAgent) > 0 && isSupportAgent[0]
 
-	if lang == "ar" {
-		msg := "مرحباً! 👋\nأنا بوت eTicket. يمكنني مساعدتك في:\n\n"
-		msg += "🤖 /ai — المساعد الذكي (بحث رحلات، رصيد، حجوزات...)\n"
-		msg += "💰 /balance — رصيد المحفظة\n"
-		msg += "✈️ /mybookings — حجوزاتي\n"
-		msg += "🌐 /lang — تغيير اللغة\n"
-		msg += "❓ /help — المساعدة\n"
-		if isSupport {
-			msg += "\n🎧 أوامر الدعم:\n"
-			msg += "📋 /tickets — تذاكري\n"
-			msg += "✅ /resolve — حل تذكرة\n"
-		}
-		if isAdmin {
-			msg += "\n🔧 أوامر المسؤول:\n"
-			msg += "⚙️ /admin — لوحة المسؤول\n"
-			msg += "💱 /setrate — تحديث سعر العملة\n"
-			msg += "💳 /addcredit — إيداع رصيد\n"
-		}
-		return msg
-	}
-
-	msg := "Welcome! 👋\nI'm the eTicket bot. I can help you with:\n\n"
-	msg += "🤖 /ai — AI assistant (search flights, balance, bookings...)\n"
-	msg += "💰 /balance — Wallet balance\n"
-	msg += "✈️ /mybookings — My bookings\n"
-	msg += "🌐 /lang — Change language\n"
-	msg += "❓ /help — Help\n"
+	var sb strings.Builder
+	sb.WriteString(m.t(lang, "welcome.intro", vars{"partnerName": m.name(ctx, partnerID, lang)}))
+	sb.WriteString("\n\n")
+	sb.WriteString(m.t(lang, "welcome.commands", nil))
+	sb.WriteString("\n")
 	if isSupport {
-		msg += "\n🎧 Support commands:\n"
-		msg += "📋 /tickets — My tickets\n"
-		msg += "✅ /resolve — Resolve a ticket\n"
+		sb.WriteString("\n" + m.t(lang, "welcome.support_commands", nil) + "\n")
 	}
 	if isAdmin {
-		msg += "\n🔧 Admin commands:\n"
-		msg += "⚙️ /admin — Admin panel\n"
-		msg += "💱 /setrate — Update currency rate\n"
-		msg += "💳 /addcredit — Deposit credit\n"
+		sb.WriteString("\n" + m.t(lang, "welcome.admin_commands", nil) + "\n")
 	}
-	return msg
+	return sb.String()
 }
 
 // Help returns the /help message.
-func (m *Messages) Help(lang string, isAdmin bool, isSupportAgent ...bool) string {
-	return m.Welcome(lang, isAdmin, isSupportAgent...)
+func (m *Messages) Help(ctx context.Context, partnerID, lang string, isAdmin bool, isSupportAgent ...bool) string {
+	return m.Welcome(ctx, partnerID, lang, isAdmin, isSupportAgent...)
+}
+
+// AIEntered returns message when user enters AI mode in partnerID's bot.
+func (m *Messages) AIEntered(ctx context.Context, partnerID, lang string) string {
+	return m.t(lang, "ai.entered", vars{"partnerName": m.name(ctx, partnerID, lang)})
+}
+
+// LanguagePrompt returns the bilingual language selection prompt.
+func (m *Messages) LanguagePrompt() string {
+	return m.bilingual("language.prompt", " / ", nil)
 }
 
 // LangChanged returns language change confirmation.
 func (m *Messages) LangChanged(lang string) string {
-	if lang == "ar" {
-		return "✅ تم تغيير اللغة إلى العربية"
-	}
-	return "✅ Language changed to English"
+	return m.t(lang, "language.changed", nil)
 }
 
 // Cancelled returns action cancelled message.
 func (m *Messages) Cancelled(lang string) string {
-	if lang == "ar" {
-		return "❌ تم إلغاء العملية"
-	}
-	return "❌ Action cancelled"
+	return m.t(lang, "session.cancelled", nil)
 }
 
 // SessionExpired returns session expiry message.
 func (m *Messages) SessionExpired(lang string, command string) string {
-	if lang == "ar" {
-		return fmt.Sprintf("⏰ انتهت الجلسة. أعد المحاولة باستخدام %s", command)
-	}
-	return fmt.Sprintf("⏰ Your session timed out. Please start again with %s", command)
+	return m.t(lang, "session.expired", vars{"command": command})
 }
 
 // Balance formats wallet balance.
 func (m *Messages) Balance(lang string, balance, currency string) string {
-	if lang == "ar" {
-		return fmt.Sprintf("💰 الرصيد: %s %s", balance, currency)
-	}
-	return fmt.Sprintf("💰 Balance: %s %s", balance, currency)
+	return m.t(lang, "wallet.balance", vars{"balance": balance, "currency": currency})
 }
 
 // NoBookings when user has no bookings.
 func (m *Messages) NoBookings(lang string) string {
-	if lang == "ar" {
-		return "📋 لا توجد حجوزات"
-	}
-	return "📋 No bookings found"
+	return m.t(lang, "bookings.none", nil)
 }
 
 // BookingItem formats a single booking.
 func (m *Messages) BookingItem(lang string, b client.BookingSummary) string {
-	if lang == "ar" {
-		return fmt.Sprintf("✈️ %s\n%s ← %s\n📅 %s | الحالة: %s",
-			b.Reference, b.Destination, b.Origin, b.Date, b.Status)
-	}
-	return fmt.Sprintf("✈️ %s\n%s → %s\n📅 %s | Status: %s",
-		b.Reference, b.Origin, b.Destination, b.Date, b.Status)
+	return m.t(lang, "bookings.item", vars{
+		"reference": b.Reference, "origin": b.Origin, "destination": b.Destination,
+		"date": b.Date, "status": b.Status,
+	})
 }
 
 // RateLimited returns rate limit message.
 func (m *Messages) RateLimited(lang string) string {
-	if lang == "ar" {
-		return "⏳ طلبات كثيرة. يرجى الانتظار قليلاً"
-	}
-	return "⏳ Too many requests. Please wait a moment"
+	return m.t(lang, "session.rate_limited", nil)
 }
 
 // NotAuthenticated when user needs to /start first.
 func (m *Messages) NotAuthenticated(lang string) string {
-	if lang == "ar" {
-		return "🔒 أرسل /start للبدء"
-	}
-	return "🔒 Send /start to get started"
+	return m.t(lang, "session.not_authenticated", nil)
 }
 
 // ErrorFromStatus maps HTTP status codes to user-friendly messages.
 func (m *Messages) ErrorFromStatus(lang string, statusCode int) string {
 	switch statusCode {
 	case 401:
-		return m.errorMsg(lang, "Session expired. Send /start to reconnect", "انتهت الجلسة. أرسل /start للإتصال")
+		return m.t(lang, "error.session_expired", nil)
 	case 403:
-		return m.errorMsg(lang, "You don't have permission for this action", "ليس لديك صلاحية لهذا الإجراء")
+		return m.t(lang, "error.forbidden", nil)
 	case 404:
-		return m.errorMsg(lang, "Not found", "غير موجود")
+		return m.t(lang, "error.not_found", nil)
 	default:
-		return m.errorMsg(lang, "Something went wrong. Please try again later", "حدث خطأ. يرجى المحاولة لاحقاً")
+		return m.GenericError(lang)
 	}
 }
 
 // GenericError returns a generic error message.
 func (m *Messages) GenericError(lang string) string {
-	return m.errorMsg(lang, "Something went wrong. Please try again later", "حدث خطأ. يرجى المحاولة لاحقاً")
+	return m.t(lang, "error.generic", nil)
 }
 
 // ServiceUnavailable returns a service unavailable message.
 func (m *Messages) ServiceUnavailable(lang string) string {
-	return m.errorMsg(lang, "Service temporarily unavailable", "الخدمة غير متاحة مؤقتاً")
+	return m.t(lang, "error.service_unavailable", nil)
 }
 
-func (m *Messages) errorMsg(lang, en, ar string) string {
-	if lang == "ar" {
-		return "⚠️ " + ar
-	}
-	return "⚠️ " + en
+// InvalidInput returns invalid input message.
+func (m *Messages) InvalidInput(lang string) string {
+	return m.t(lang, "session.invalid_input", nil)
 }
 
 // AdminMenu returns admin menu text.
 func (m *Messages) AdminMenu(lang string) string {
-	if lang == "ar" {
-		return "🔧 لوحة المسؤول\nاختر إجراء:"
-	}
-	return "🔧 Admin Panel\nChoose an action:"
+	return m.t(lang, "admin.menu", nil)
 }
 
 // SetRatePromptCurrency asks which currency to update.
 func (m *Messages) SetRatePromptCurrency(lang string, currencies []client.Currency) string {
 	var sb strings.Builder
-	if lang == "ar" {
-		sb.WriteString("💱 اختر العملة لتحديث سعرها:\n\n")
-	} else {
-		sb.WriteString("💱 Choose currency to update rate:\n\n")
-	}
+	sb.WriteString(m.t(lang, "admin.set_rate.choose_currency", nil) + "\n\n")
 	for _, c := range currencies {
-		sb.WriteString(fmt.Sprintf("• %s — %s (%.2f)\n", c.Code, c.Name, c.ExchangeRate))
+		sb.WriteString(m.t(lang, "admin.set_rate.currency_line", vars{
+			"code": c.Code, "name": c.Name, "rate": strconv.FormatFloat(c.ExchangeRate, 'f', 2, 64),
+		}) + "\n")
 	}
-	if lang == "ar" {
-		sb.WriteString("\nأرسل رمز العملة (مثال: USD)")
-	} else {
-		sb.WriteString("\nSend the currency code (e.g., USD)")
-	}
+	sb.WriteString("\n" + m.t(lang, "admin.set_rate.send_code", nil))
 	return sb.String()
 }
 
 // SetRatePromptRate asks for the new exchange rate.
 func (m *Messages) SetRatePromptRate(lang string, code string) string {
-	if lang == "ar" {
-		return fmt.Sprintf("💱 أرسل سعر الصرف الجديد للعملة %s:", code)
-	}
-	return fmt.Sprintf("💱 Send the new exchange rate for %s:", code)
+	return m.t(lang, "admin.set_rate.send_rate", vars{"code": code})
 }
 
 // SetRateSuccess returns success message.
 func (m *Messages) SetRateSuccess(lang, code string, rate float64) string {
-	if lang == "ar" {
-		return fmt.Sprintf("✅ تم تحديث سعر %s إلى %.4f", code, rate)
-	}
-	return fmt.Sprintf("✅ Updated %s rate to %.4f", code, rate)
+	return m.t(lang, "admin.set_rate.success", vars{"code": code, "rate": strconv.FormatFloat(rate, 'f', 4, 64)})
 }
 
 // AddCreditPromptUserID asks for user ID.
 func (m *Messages) AddCreditPromptUserID(lang string) string {
-	if lang == "ar" {
-		return "💳 أرسل معرف المستخدم (UUID):"
-	}
-	return "💳 Send the user ID (UUID):"
+	return m.t(lang, "admin.add_credit.send_user_id", nil)
 }
 
 // AddCreditPromptAmount asks for amount and currency.
 func (m *Messages) AddCreditPromptAmount(lang string) string {
-	if lang == "ar" {
-		return "💳 أرسل المبلغ والعملة (مثال: 100 USD):"
-	}
-	return "💳 Send the amount and currency (e.g., 100 USD):"
+	return m.t(lang, "admin.add_credit.send_amount", nil)
 }
 
 // AddCreditPromptNote asks for a note.
 func (m *Messages) AddCreditPromptNote(lang string) string {
-	if lang == "ar" {
-		return "💳 أرسل ملاحظة (أو أرسل - للتخطي):"
-	}
-	return "💳 Send a note (or send - to skip):"
+	return m.t(lang, "admin.add_credit.send_note", nil)
 }
 
 // AddCreditSuccess returns deposit success message.
 func (m *Messages) AddCreditSuccess(lang string, amount, currency, txnID string) string {
-	if lang == "ar" {
-		return fmt.Sprintf("✅ تم إيداع %s %s\nمعرف العملية: %s", amount, currency, txnID)
-	}
-	return fmt.Sprintf("✅ Deposited %s %s\nTransaction ID: %s", amount, currency, txnID)
+	return m.t(lang, "admin.add_credit.success", vars{"amount": amount, "currency": currency, "transactionID": txnID})
 }
 
-// AIEntered returns message when user enters AI mode.
-func (m *Messages) AIEntered(lang string) string {
-	if lang == "ar" {
-		return "🤖 مساعد eTicket الذكي جاهز!\nاكتب سؤالك وسأساعدك (بحث رحلات، رصيد، حجوزات...)\n\nأرسل /cancel للخروج."
-	}
-	return "🤖 eTicket AI assistant ready!\nType your question and I'll help (search flights, balance, bookings...)\n\nSend /cancel to exit."
+// CallbackNotAuthenticated is the inline-button toast for an unknown session.
+func (m *Messages) CallbackNotAuthenticated(lang string) string {
+	return m.t(lang, "callback.not_authenticated", nil)
 }
 
-// InvalidInput returns invalid input message.
-func (m *Messages) InvalidInput(lang string) string {
-	if lang == "ar" {
-		return "❌ إدخال غير صالح. حاول مرة أخرى"
-	}
-	return "❌ Invalid input. Please try again"
+// CallbackInvalidTicket is the inline-button toast for a button without a ticket.
+func (m *Messages) CallbackInvalidTicket(lang string) string {
+	return m.t(lang, "callback.invalid_ticket", nil)
+}
+
+// CallbackResolveFailed is the inline-button toast when resolving a ticket fails.
+func (m *Messages) CallbackResolveFailed(lang string) string {
+	return m.t(lang, "callback.resolve_failed", nil)
+}
+
+// CallbackError is the generic inline-button error toast.
+func (m *Messages) CallbackError(lang string) string {
+	return m.t(lang, "callback.error", nil)
 }

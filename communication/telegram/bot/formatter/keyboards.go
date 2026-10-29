@@ -5,20 +5,11 @@ import (
 )
 
 // AdminMenuKeyboard returns the admin inline keyboard.
-func AdminMenuKeyboard(lang string) *tele.ReplyMarkup {
+func (m *Messages) AdminMenuKeyboard(lang string) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 
-	var setRate, addCredit string
-	if lang == "ar" {
-		setRate = "💱 تحديث سعر العملة"
-		addCredit = "💳 إيداع رصيد"
-	} else {
-		setRate = "💱 Set Exchange Rate"
-		addCredit = "💳 Add Credit"
-	}
-
-	btnSetRate := menu.Data(setRate, "admin_setrate")
-	btnAddCredit := menu.Data(addCredit, "admin_addcredit")
+	btnSetRate := menu.Data(m.t(lang, "admin.button.set_rate", nil), "admin_setrate")
+	btnAddCredit := menu.Data(m.t(lang, "admin.button.add_credit", nil), "admin_addcredit")
 
 	menu.Inline(
 		menu.Row(btnSetRate),
@@ -27,12 +18,13 @@ func AdminMenuKeyboard(lang string) *tele.ReplyMarkup {
 	return menu
 }
 
-// LangKeyboard returns the language selection inline keyboard.
-func LangKeyboard() *tele.ReplyMarkup {
+// LangKeyboard returns the language selection inline keyboard. Each button is
+// labelled in its own language.
+func (m *Messages) LangKeyboard() *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 
-	btnAr := menu.Data("🇮🇶 العربية", "lang_ar")
-	btnEn := menu.Data("🇬🇧 English", "lang_en")
+	btnAr := menu.Data(m.t("ar", "language.button", nil), "lang_ar")
+	btnEn := menu.Data(m.t("en", "language.button", nil), "lang_en")
 
 	menu.Inline(
 		menu.Row(btnAr, btnEn),
@@ -41,17 +33,10 @@ func LangKeyboard() *tele.ReplyMarkup {
 }
 
 // CancelKeyboard returns a cancel button.
-func CancelKeyboard(lang string) *tele.ReplyMarkup {
+func (m *Messages) CancelKeyboard(lang string) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 
-	var label string
-	if lang == "ar" {
-		label = "❌ إلغاء"
-	} else {
-		label = "❌ Cancel"
-	}
-
-	btnCancel := menu.Data(label, "cancel_action")
+	btnCancel := menu.Data(m.t(lang, "action.cancel_button", nil), "cancel_action")
 	menu.Inline(menu.Row(btnCancel))
 	return menu
 }

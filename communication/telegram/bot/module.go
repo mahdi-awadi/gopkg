@@ -43,6 +43,12 @@ type Config struct {
 	// is true.
 	Ingestor  conversation.Ingestor
 	WriteConv bool
+
+	// PartnerName returns the brand name a partner's bot introduces itself
+	// with (/start, /help, /ai). It is called per Reply with the bot's
+	// partnerID. Optional: when nil or when it returns "", the bot uses a
+	// neutral word from its message catalogue, never a brand or partner code.
+	PartnerName func(ctx context.Context, partnerID string) string
 }
 
 // Module manages the interactive Telegram bot lifecycle.
@@ -76,7 +82,11 @@ func Start(ctx context.Context, cfg Config, eventBroker broker.Broker, logger *z
 	sessionMgr := auth.NewSessionManager(rdb, identityClient)
 	rateLimiter := ratelimit.NewRateLimiter(rdb, cfg.BotRateLimitPerMin)
 	stateMgr := state.NewManager(rdb)
-	msgFormatter := formatter.NewMessages()
+	msgFormatter, err := formatter.NewMessages(cfg.PartnerName)
+	if err != nil {
+		_ = rdb.Close()
+		return nil, err
+	}
 	agentRegistry := support.NewAgentRegistry(rdb)
 
 	handlerSet := handlers.NewHandlerSet(sessionMgr, gatewayClient, stateMgr, rateLimiter, msgFormatter, logger)

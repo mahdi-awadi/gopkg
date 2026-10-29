@@ -41,7 +41,7 @@ func (h *HandlerSet) HandleAI(partnerID string) tele.HandlerFunc {
 			Data:    map[string]string{},
 		})
 
-		return c.Send(h.Formatter.AIEntered(sess.Lang))
+		return c.Send(h.Formatter.AIEntered(ctx, partnerID, sess.Lang))
 	}
 }
 

@@ -6,8 +6,6 @@ import (
 
 	"go.uber.org/zap"
 	tele "gopkg.in/telebot.v4"
-
-	"github.com/mahdi-awadi/gopkg/communication/telegram/bot/formatter"
 )
 
 // HandleStart handles /start — authenticates and shows welcome.
@@ -52,7 +50,7 @@ func (h *HandlerSet) HandleStart(partnerID string) tele.HandlerFunc {
 		)
 
 		isSupportAgent := hasRole(sess.Roles, "CUSTOMER_SUPPORT")
-		return c.Send(h.Formatter.Welcome(sess.Lang, sess.IsAdmin(), isSupportAgent))
+		return c.Send(h.Formatter.Welcome(ctx, partnerID, sess.Lang, sess.IsAdmin(), isSupportAgent))
 	}
 }
 
@@ -65,14 +63,14 @@ func (h *HandlerSet) HandleHelp(partnerID string) tele.HandlerFunc {
 			return c.Send(h.Formatter.NotAuthenticated("en"))
 		}
 		isSupportAgent := hasRole(sess.Roles, "CUSTOMER_SUPPORT")
-		return c.Send(h.Formatter.Help(sess.Lang, sess.IsAdmin(), isSupportAgent))
+		return c.Send(h.Formatter.Help(ctx, partnerID, sess.Lang, sess.IsAdmin(), isSupportAgent))
 	}
 }
 
 // HandleLang handles /lang — shows language selection.
 func (h *HandlerSet) HandleLang(partnerID string) tele.HandlerFunc {
 	return func(c tele.Context) error {
-		return c.Send("🌐 Choose language / اختر اللغة:", formatter.LangKeyboard())
+		return c.Send(h.Formatter.LanguagePrompt(), h.Formatter.LangKeyboard())
 	}
 }
 
@@ -81,7 +79,7 @@ func (h *HandlerSet) HandleLangCallback(partnerID, lang string) tele.HandlerFunc
 	return func(c tele.Context) error {
 		ctx := context.Background()
 		if err := h.Sessions.SetLang(ctx, partnerID, c.Sender().ID, lang); err != nil {
-			return c.Respond(&tele.CallbackResponse{Text: "Error"})
+			return c.Respond(&tele.CallbackResponse{Text: h.Formatter.CallbackError("en")})
 		}
 		_ = c.Respond(&tele.CallbackResponse{})
 		return c.Edit(h.Formatter.LangChanged(lang))

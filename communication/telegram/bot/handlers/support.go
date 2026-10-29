@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"go.uber.org/zap"
 	tele "gopkg.in/telebot.v4"
@@ -36,11 +34,7 @@ func (sh *SupportHandlers) HandleTickets(partnerID string) tele.HandlerFunc {
 			return c.Send(sh.handlerSet.Formatter.NotAuthenticated("en"))
 		}
 		if !hasRole(sess.Roles, "CUSTOMER_SUPPORT") && !sess.IsAdmin() {
-			lang := sess.Lang
-			if lang == "ar" {
-				return c.Send("ليس لديك صلاحية الدعم الفني.")
-			}
-			return c.Send("You don't have support agent permissions.")
+			return c.Send(sh.handlerSet.Formatter.SupportNoPermission(sess.Lang))
 		}
 
 		tickets, err := sh.handlerSet.Gateway.ListAgentTickets(token)
@@ -50,22 +44,10 @@ func (sh *SupportHandlers) HandleTickets(partnerID string) tele.HandlerFunc {
 		}
 
 		if len(tickets) == 0 {
-			if sess.Lang == "ar" {
-				return c.Send("لا توجد تذاكر مسندة إليك حالياً.")
-			}
-			return c.Send("No tickets assigned to you.")
+			return c.Send(sh.handlerSet.Formatter.NoAssignedTickets(sess.Lang))
 		}
 
-		var sb strings.Builder
-		if sess.Lang == "ar" {
-			sb.WriteString("📋 تذاكرك:\n\n")
-		} else {
-			sb.WriteString("📋 Your tickets:\n\n")
-		}
-		for _, t := range tickets {
-			sb.WriteString(fmt.Sprintf("🎫 #%s — %s [%s]\n", t.TicketNumber, t.Category, t.Status))
-		}
-		return c.Send(sb.String())
+		return c.Send(sh.handlerSet.Formatter.TicketList(sess.Lang, tickets))
 	}
 }
 
@@ -87,10 +69,7 @@ func (sh *SupportHandlers) HandleResolveCommand(partnerID string) tele.HandlerFu
 			// Use active ticket
 			tid, err := sh.registry.GetActiveTicket(ctx, partnerID, c.Sender().ID)
 			if err != nil {
-				if sess.Lang == "ar" {
-					return c.Send("لا توجد تذكرة نشطة لحلها.")
-				}
-				return c.Send("No active ticket to resolve.")
+				return c.Send(sh.handlerSet.Formatter.NoActiveTicketToResolve(sess.Lang))
 			}
 			ticketID = tid
 		}
@@ -104,10 +83,7 @@ func (sh *SupportHandlers) HandleResolveCommand(partnerID string) tele.HandlerFu
 		// Clear active ticket
 		sh.registry.ClearActiveTicket(ctx, partnerID, c.Sender().ID)
 
-		if sess.Lang == "ar" {
-			return c.Send("✅ تم حل التذكرة وإنهاء المحادثة.")
-		}
-		return c.Send("✅ Ticket resolved. Chat ended.")
+		return c.Send(sh.handlerSet.Formatter.TicketResolvedChatEnded(sess.Lang))
 	}
 }
 
@@ -118,12 +94,12 @@ func (sh *SupportHandlers) HandleAcceptCallback(partnerID string) tele.HandlerFu
 
 		token, sess, err := sh.handlerSet.Sessions.GetValidToken(ctx, partnerID, c.Sender().ID)
 		if err != nil || sess == nil {
-			return c.Respond(&tele.CallbackResponse{Text: "Not authenticated"})
+			return c.Respond(&tele.CallbackResponse{Text: sh.handlerSet.Formatter.CallbackNotAuthenticated("en")})
 		}
 
 		data := c.Data() // format: ticket_id
 		if data == "" {
-			return c.Respond(&tele.CallbackResponse{Text: "Invalid ticket"})
+			return c.Respond(&tele.CallbackResponse{Text: sh.handlerSet.Formatter.CallbackInvalidTicket("en")})
 		}
 
 		err = sh.handlerSet.Gateway.AssignTicket(token, data)
@@ -133,10 +109,7 @@ func (sh *SupportHandlers) HandleAcceptCallback(partnerID string) tele.HandlerFu
 				zap.Error(err),
 			)
 			_ = c.Respond(&tele.CallbackResponse{})
-			if sess.Lang == "ar" {
-				return c.Edit("❌ هذه التذكرة مسندة لوكيل آخر بالفعل.")
-			}
-			return c.Edit("❌ This ticket has already been claimed by another agent.")
+			return c.Edit(sh.handlerSet.Formatter.TicketAlreadyClaimed(sess.Lang))
 		}
 
 		// Set as active ticket — all text messages will go to this ticket
@@ -148,10 +121,7 @@ func (sh *SupportHandlers) HandleAcceptCallback(partnerID string) tele.HandlerFu
 		}
 
 		_ = c.Respond(&tele.CallbackResponse{})
-		if sess.Lang == "ar" {
-			return c.Edit(fmt.Sprintf("✅ تم إسناد التذكرة %s إليك. يمكنك الكتابة مباشرة للتواصل مع العميل.", data))
-		}
-		return c.Edit(fmt.Sprintf("✅ Ticket %s assigned to you. Type your message to respond to the customer.", data))
+		return c.Edit(sh.handlerSet.Formatter.TicketAssigned(sess.Lang, data))
 	}
 }
 
@@ -162,28 +132,25 @@ func (sh *SupportHandlers) HandleResolveCallback(partnerID string) tele.HandlerF
 
 		token, sess, err := sh.handlerSet.Sessions.GetValidToken(ctx, partnerID, c.Sender().ID)
 		if err != nil || sess == nil {
-			return c.Respond(&tele.CallbackResponse{Text: "Not authenticated"})
+			return c.Respond(&tele.CallbackResponse{Text: sh.handlerSet.Formatter.CallbackNotAuthenticated("en")})
 		}
 
 		data := c.Data()
 		if data == "" {
-			return c.Respond(&tele.CallbackResponse{Text: "Invalid ticket"})
+			return c.Respond(&tele.CallbackResponse{Text: sh.handlerSet.Formatter.CallbackInvalidTicket("en")})
 		}
 
 		err = sh.handlerSet.Gateway.UpdateTicketStatus(token, data, "resolved")
 		if err != nil {
 			sh.logger.Error("resolve callback failed", zap.String("ticket_id", data), zap.Error(err))
-			return c.Respond(&tele.CallbackResponse{Text: "Failed to resolve"})
+			return c.Respond(&tele.CallbackResponse{Text: sh.handlerSet.Formatter.CallbackResolveFailed("en")})
 		}
 
 		// Clear active ticket
 		sh.registry.ClearActiveTicket(ctx, partnerID, c.Sender().ID)
 
 		_ = c.Respond(&tele.CallbackResponse{})
-		if sess.Lang == "ar" {
-			return c.Edit(fmt.Sprintf("✅ تم حل التذكرة %s", data))
-		}
-		return c.Edit(fmt.Sprintf("✅ Ticket %s resolved", data))
+		return c.Edit(sh.handlerSet.Formatter.TicketResolved(sess.Lang, data))
 	}
 }
 
@@ -212,10 +179,7 @@ func (sh *SupportHandlers) HandleReplyToTicket(partnerID string, c tele.Context)
 			// Check if this user is a support agent — if so, tell them no active ticket
 			_, sess, authErr := sh.handlerSet.Sessions.GetValidToken(ctx, partnerID, c.Sender().ID)
 			if authErr == nil && sess != nil && (hasRole(sess.Roles, "CUSTOMER_SUPPORT") || sess.IsAdmin()) {
-				if sess.Lang == "ar" {
-					return true, c.Send("لا توجد تذكرة نشطة. اضغط [قبول] على إشعار تذكرة للبدء.")
-				}
-				return true, c.Send("No active ticket. Tap [Accept] on a ticket notification to start.")
+				return true, c.Send(sh.handlerSet.Formatter.NoActiveTicket(sess.Lang))
 			}
 			return false, nil
 		}
@@ -236,10 +200,7 @@ func (sh *SupportHandlers) HandleReplyToTicket(partnerID string, c tele.Context)
 	// Store this message too so agent can reply to their own messages
 	sh.registry.StoreTicketMessage(ctx, partnerID, c.Message().ID, ticketID)
 
-	if sess.Lang == "ar" {
-		return true, c.Send("✅ تم إرسال ردك للعميل.\nلإنهاء المحادثة: /resolve")
-	}
-	return true, c.Send("✅ Reply sent to customer.\nTo end chat: /resolve")
+	return true, c.Send(sh.handlerSet.Formatter.ReplySent(sess.Lang))
 }
 
 func hasRole(roles []string, target string) bool {

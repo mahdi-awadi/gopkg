@@ -1,0 +1,105 @@
+{
+  "brand": {
+    "neutral": "Booking"
+  },
+  "welcome": {
+    "intro": "Welcome! 👋\nI'm the {{.partnerName}} bot. I can help you with:",
+    "commands": "🤖 /ai — AI assistant (search flights, balance, bookings...)\n💰 /balance — Wallet balance\n✈️ /mybookings — My bookings\n🌐 /lang — Change language\n❓ /help — Help",
+    "support_commands": "🎧 Support commands:\n📋 /tickets — My tickets\n✅ /resolve — Resolve a ticket",
+    "admin_commands": "🔧 Admin commands:\n⚙️ /admin — Admin panel\n💱 /setrate — Update currency rate\n💳 /addcredit — Deposit credit"
+  },
+  "ai": {
+    "entered": "🤖 {{.partnerName}} AI assistant ready!\nType your question and I'll help (search flights, balance, bookings...)\n\nSend /cancel to exit."
+  },
+  "language": {
+    "prompt": "🌐 Choose language",
+    "button": "🇬🇧 English",
+    "changed": "✅ Language changed to English"
+  },
+  "session": {
+    "cancelled": "❌ Action cancelled",
+    "expired": "⏰ Your session timed out. Please start again with {{.command}}",
+    "not_authenticated": "🔒 Send /start to get started",
+    "rate_limited": "⏳ Too many requests. Please wait a moment",
+    "invalid_input": "❌ Invalid input. Please try again"
+  },
+  "wallet": {
+    "balance": "💰 Balance: {{.balance}} {{.currency}}"
+  },
+  "bookings": {
+    "none": "📋 No bookings found",
+    "item": "✈️ {{.reference}}\n{{.origin}} → {{.destination}}\n📅 {{.date}} | Status: {{.status}}"
+  },
+  "error": {
+    "session_expired": "⚠️ Session expired. Send /start to reconnect",
+    "forbidden": "⚠️ You don't have permission for this action",
+    "not_found": "⚠️ Not found",
+    "generic": "⚠️ Something went wrong. Please try again later",
+    "service_unavailable": "⚠️ Service temporarily unavailable"
+  },
+  "admin": {
+    "menu": "🔧 Admin Panel\nChoose an action:",
+    "button": {
+      "set_rate": "💱 Set Exchange Rate",
+      "add_credit": "💳 Add Credit"
+    },
+    "set_rate": {
+      "choose_currency": "💱 Choose currency to update rate:",
+      "currency_line": "• {{.code}} — {{.name}} ({{.rate}})",
+      "send_code": "Send the currency code (e.g., USD)",
+      "send_rate": "💱 Send the new exchange rate for {{.code}}:",
+      "success": "✅ Updated {{.code}} rate to {{.rate}}"
+    },
+    "add_credit": {
+      "send_user_id": "💳 Send the user ID (UUID):",
+      "send_amount": "💳 Send the amount and currency (e.g., 100 USD):",
+      "send_note": "💳 Send a note (or send - to skip):",
+      "success": "✅ Deposited {{.amount}} {{.currency}}\nTransaction ID: {{.transactionID}}"
+    }
+  },
+  "action": {
+    "cancel_button": "❌ Cancel"
+  },
+  "callback": {
+    "not_authenticated": "Not authenticated",
+    "invalid_ticket": "Invalid ticket",
+    "resolve_failed": "Failed to resolve",
+    "error": "Error"
+  },
+  "support": {
+    "no_permission": "You don't have support agent permissions.",
+    "tickets": {
+      "none": "No tickets assigned to you.",
+      "header": "📋 Your tickets:",
+      "line": "🎫 #{{.number}} — {{.category}} [{{.status}}]"
+    },
+    "ticket": {
+      "no_active_to_resolve": "No active ticket to resolve.",
+      "resolved_chat_ended": "✅ Ticket resolved. Chat ended.",
+      "already_claimed": "❌ This ticket has already been claimed by another agent.",
+      "assigned": "✅ Ticket {{.ticketID}} assigned to you. Type your message to respond to the customer.",
+      "resolved": "✅ Ticket {{.ticketID}} resolved",
+      "no_active": "No active ticket. Tap [Accept] on a ticket notification to start.",
+      "reply_sent": "✅ Reply sent to customer.\nTo end chat: /resolve"
+    },
+    "button": {
+      "accept": "✅ Accept",
+      "resolve": "✅ Resolve"
+    },
+    "notify": {
+      "new_ticket": "🎫 New support ticket #{{.number}}",
+      "customer": "👤 {{.name}}",
+      "phone": "📱 {{.phone}}",
+      "channel": "📍 {{.channel}}",
+      "category_priority": "📂 {{.category}} | ⚡ {{.priority}}",
+      "reason": "🔄 {{.reason}}",
+      "initial_message": "💬 \"{{.message}}\"",
+      "ai_summary": "🤖 AI Summary:\n{{.summary}}",
+      "reply_to_customer_hint": "Reply to this message to respond to the customer.",
+      "customer_reply": "💬 Customer reply on #{{.number}}:\n\n{{.preview}}",
+      "reply_hint": "Reply to this message to respond.",
+      "rating": "📊 Customer rated ticket #{{.number}}: {{.stars}} ({{.rating}}/5)",
+      "rating_comment": "Comment: {{.comment}}"
+    }
+  }
+}
